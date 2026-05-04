@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# TPM entrypoint for tmux_explore.
+# TPM entrypoint for tmux_explode.
 # Reads user options and binds the toggle key. The toggle script itself
-# re-reads runtime options on every invocation, so changes to @explore-mode
-# or @explore-window-name take effect without re-sourcing tmux.conf.
+# re-reads runtime options on every invocation, so changes to @explode-mode
+# or @explode-window-name take effect without re-sourcing tmux.conf.
 
 CURRENT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
@@ -20,6 +20,6 @@ get_tmux_option() {
     fi
 }
 
-key=$(get_tmux_option "@explore-key" "$default_key")
+key=$(get_tmux_option "@explode-key" "$default_key")
 
 tmux bind-key "$key" run-shell "$CURRENT_DIR/scripts/overview_toggle.sh"
