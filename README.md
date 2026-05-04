@@ -1,55 +1,87 @@
 # tmux_explore
 
-A tmux plugin that "explodes" all tmux windows into a single tiled view of split
-panes, then "unexplodes" them back to their original windows. Useful for getting
-a glance at every running terminal at once and then returning to focused work.
+A tmux plugin that "explodes" every tmux window into a single tiled overview
+window of split panes, then "unexplodes" them back to their original windows.
+One keybinding to glance at every running terminal at once, then return to
+focused work.
 
-## Status
+## Install
 
-Early scaffold. The script below works as a starting point; the plugin polish,
-tests, and packaging are still to be done.
+### Via [TPM](https://github.com/tmux-plugins/tpm) (recommended)
 
-## Design
+Add to your `~/.tmux.conf`:
 
-Two modes, toggled with one keybinding (`prefix + O`):
+```tmux
+set -g @plugin 'wbern/tmux_explore'
+```
 
-- **Explode**: gather the active pane from every window into a new `overview`
-  window, laid out tiled.
-- **Unexplode**: detach each pane from the `overview` window and put it back as
-  its own window with its original name.
+Then `prefix + I` to install.
 
-State is tracked per-pane via a tmux user option `@orig_window`, set when a pane
-is gathered. On unexplode, we read it back and restore the window name.
+### Manual
 
-Caveats:
-- Only the active pane of each window is gathered. Windows with multiple panes
-  keep their other panes parked. Extending to sweep every pane is a 2-line
-  change in the loop.
-- Tiled layout becomes cramped above ~6 windows. Above that, `prefix + w`
-  (`choose-tree -Zw`) is genuinely the better tool.
+```sh
+git clone https://github.com/wbern/tmux_explore ~/.tmux/plugins/tmux_explore
+```
 
-## Files
+Add to `~/.tmux.conf`:
 
-- `overview-toggle.sh` — the toggle script. Drop in `~/.tmux/`, `chmod +x`.
-- `tmux.conf.snippet` — minimal config to wire it up.
+```tmux
+run-shell ~/.tmux/plugins/tmux_explore/tmux_explore.tmux
+```
 
-## Original conversation context
+Reload tmux: `tmux source-file ~/.tmux.conf`.
 
-This rig started from a conversation about Ghostty not having a "split all tabs
-into panes" hotkey. tmux's `join-pane` / `break-pane` primitives can do it; this
-project wraps them into a single toggle.
+## Usage
 
-Quoting the relevant insight:
+`prefix + O` toggles between the two modes:
 
-> No turnkey plugin for this exact toggle — but tmux has the primitives.
-> The lazy, non-destructive option: `prefix + w` opens `choose-tree -Zw`.
-> The "really merge them into splits" option: tmux has `join-pane` (move pane
-> into another window) and `break-pane` (move pane out into its own window).
-> No plugin wraps these into a one-key toggle, but it's a small script.
+- **Explode** — gather panes from every window into a new `overview` window,
+  laid out tiled.
+- **Unexplode** — break each pane back out, restoring the original window name.
+  Panes that originated from the same source window are grouped back together.
 
-## Roadmap (see beads in `.beads/`)
+## Configuration
 
-1. Land the toggle script as a real tmux plugin (TPM-compatible)
-2. Handle multi-pane windows (sweep all, not just active)
-3. Test across tmux 3.0–3.6
-4. README badges, install instructions, screenshots/gif
+All options are read fresh on each toggle, so changes take effect without
+re-sourcing `tmux.conf`.
+
+| Option                  | Default     | Description                                                          |
+| ----------------------- | ----------- | -------------------------------------------------------------------- |
+| `@explore-key`          | `O`         | Key bound under `prefix` to trigger the toggle.                      |
+| `@explore-mode`         | `active`    | `active` = gather only the active pane of each window. `all` = sweep every pane. |
+| `@explore-window-name`  | `overview`  | Name used for the overview window. Change if it collides with a window you already use. |
+
+Example:
+
+```tmux
+set -g @plugin 'wbern/tmux_explore'
+set -g @explore-key 'E'
+set -g @explore-mode 'all'
+set -g @explore-window-name 'glance'
+```
+
+## Behavior notes
+
+- Above ~6 windows the tiled layout becomes cramped; `prefix + w`
+  (`choose-tree -Zw`) is genuinely the better tool at that scale.
+- Pane origin is tracked via the per-pane tmux user option `@orig_window`,
+  set when the pane is gathered.
+- If a window with the configured overview name already exists, explode is a
+  no-op and shows a status-line message — rename the existing window or pick a
+  different `@explore-window-name`.
+- Tested manually on tmux 3.3a and 3.5 (the versions that ship via Homebrew on
+  recent macOS).
+
+## Development
+
+The plugin is two files:
+
+- `tmux_explore.tmux` — TPM entrypoint. Reads `@explore-key` and binds it.
+- `scripts/overview_toggle.sh` — the toggle logic. Re-reads runtime options on
+  every invocation.
+
+Issues and PRs welcome.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
