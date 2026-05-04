@@ -1,0 +1,6 @@
+bottom-left   | orig=charlie  | content="CHARLIE"
+bottom-right  | orig=delta    | content="DELTA"
+middle-left   | orig=bravo    | content="BRAVO-2"
+middle-right  | orig=bravo    | content="BRAVO-3"
+top-left      | orig=alpha    | content="ALPHA"
+top-right     | orig=bravo    | content="BRAVO-1"
