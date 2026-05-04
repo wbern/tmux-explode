@@ -32,9 +32,10 @@ trap cleanup EXIT
 MARKER_RE='^[[:space:]]+>>> [A-Z][A-Z0-9-]+ <<<[[:space:]]*$'
 
 label_pane() {
-    local pane="$1" label="$2"
+    local pane="$1" label="$2" quoted
+    quoted=$(printf '%q' "$label")
     "${TMUX_CMD[@]}" send-keys -t "$pane" \
-        "clear; printf '\\n  >>> %s <<<\\n' '$label'; cat" Enter
+        "clear; printf '\\n  >>> %s <<<\\n' $quoted; cat" Enter
 }
 
 wait_for_markers() {

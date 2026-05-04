@@ -69,7 +69,8 @@ set -g @explode-window-name 'glance'
 - If a window with the configured overview name already exists, explode is a
   no-op and shows a status-line message — rename the existing window or pick a
   different `@explode-window-name`.
-- Tested manually on tmux 3.6a (the version that ships via Homebrew on recent
+- Automated visual snapshot tests run in CI on `ubuntu-latest`; also tested
+  manually on tmux 3.6a (the version that ships via Homebrew on recent
   macOS).
 
 ## Development
