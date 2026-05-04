@@ -3,8 +3,8 @@
 # unexploded (panes restored to their original windows).
 #
 # Runtime options (read fresh on each invocation):
-#   @explore-mode         'active' (default) or 'all'
-#   @explore-window-name  default 'overview'
+#   @explode-mode         'active' (default) or 'all'
+#   @explode-window-name  default 'overview'
 
 set -euo pipefail
 
@@ -20,8 +20,8 @@ get_tmux_option() {
     fi
 }
 
-OVERVIEW=$(get_tmux_option "@explore-window-name" "overview")
-MODE=$(get_tmux_option "@explore-mode" "active")
+OVERVIEW=$(get_tmux_option "@explode-window-name" "overview")
+MODE=$(get_tmux_option "@explode-mode" "active")
 
 CURRENT=$(tmux display-message -p '#W')
 
@@ -65,9 +65,9 @@ unexplode() {
 
 explode() {
     # Refuse to clobber an existing window with the configured name. The user
-    # can rename it or change @explore-window-name and try again.
+    # can rename it or change @explode-window-name and try again.
     if tmux list-windows -F '#{window_name}' | grep -Fxq "$OVERVIEW"; then
-        tmux display-message "tmux_explore: window '$OVERVIEW' already exists; rename it or set @explore-window-name"
+        tmux display-message "tmux_explode: window '$OVERVIEW' already exists; rename it or set @explode-window-name"
         return 1
     fi
 

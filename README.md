@@ -1,4 +1,4 @@
-# tmux_explore
+# tmux_explode
 
 A tmux plugin that "explodes" every tmux window into a single tiled overview
 window of split panes, then "unexplodes" them back to their original windows.
@@ -12,7 +12,7 @@ focused work.
 Add to your `~/.tmux.conf`:
 
 ```tmux
-set -g @plugin 'wbern/tmux_explore'
+set -g @plugin 'wbern/tmux-explode'
 ```
 
 Then `prefix + I` to install.
@@ -20,13 +20,13 @@ Then `prefix + I` to install.
 ### Manual
 
 ```sh
-git clone https://github.com/wbern/tmux_explore ~/.tmux/plugins/tmux_explore
+git clone https://github.com/wbern/tmux-explode ~/.tmux/plugins/tmux-explode
 ```
 
 Add to `~/.tmux.conf`:
 
 ```tmux
-run-shell ~/.tmux/plugins/tmux_explore/tmux_explore.tmux
+run-shell ~/.tmux/plugins/tmux-explode/tmux_explode.tmux
 ```
 
 Reload tmux: `tmux source-file ~/.tmux.conf`.
@@ -47,17 +47,17 @@ re-sourcing `tmux.conf`.
 
 | Option                  | Default     | Description                                                          |
 | ----------------------- | ----------- | -------------------------------------------------------------------- |
-| `@explore-key`          | `O`         | Key bound under `prefix` to trigger the toggle.                      |
-| `@explore-mode`         | `active`    | `active` = gather only the active pane of each window. `all` = sweep every pane. |
-| `@explore-window-name`  | `overview`  | Name used for the overview window. Change if it collides with a window you already use. |
+| `@explode-key`          | `O`         | Key bound under `prefix` to trigger the toggle.                      |
+| `@explode-mode`         | `active`    | `active` = gather only the active pane of each window. `all` = sweep every pane. |
+| `@explode-window-name`  | `overview`  | Name used for the overview window. Change if it collides with a window you already use. |
 
 Example:
 
 ```tmux
-set -g @plugin 'wbern/tmux_explore'
-set -g @explore-key 'E'
-set -g @explore-mode 'all'
-set -g @explore-window-name 'glance'
+set -g @plugin 'wbern/tmux-explode'
+set -g @explode-key 'E'
+set -g @explode-mode 'all'
+set -g @explode-window-name 'glance'
 ```
 
 ## Behavior notes
@@ -68,15 +68,15 @@ set -g @explore-window-name 'glance'
   set when the pane is gathered.
 - If a window with the configured overview name already exists, explode is a
   no-op and shows a status-line message — rename the existing window or pick a
-  different `@explore-window-name`.
-- Tested manually on tmux 3.3a and 3.5 (the versions that ship via Homebrew on
-  recent macOS).
+  different `@explode-window-name`.
+- Tested manually on tmux 3.6a (the version that ships via Homebrew on recent
+  macOS).
 
 ## Development
 
 The plugin is two files:
 
-- `tmux_explore.tmux` — TPM entrypoint. Reads `@explore-key` and binds it.
+- `tmux_explode.tmux` — TPM entrypoint. Reads `@explode-key` and binds it.
 - `scripts/overview_toggle.sh` — the toggle logic. Re-reads runtime options on
   every invocation.
 
