@@ -42,8 +42,9 @@ unexplode() {
     local live_windows
     live_windows=$(tmux list-windows -t "$SESSION" -F '#{window_id}')
 
-    # Group panes by their @orig_window name, so siblings from the same source
-    # window (in 'all' mode) end up reunited rather than spawning duplicates.
+    # Group panes by their @orig_window_id so siblings from the same source
+    # window get reunited. Keying on the id (not the name) means two source
+    # windows that happen to share a name don't get collapsed into one.
     declare -A first_pane_of_window
     local panes_data
     panes_data=$(tmux list-panes -t "$CURRENT_WIN" \
@@ -64,18 +65,23 @@ unexplode() {
             continue
         fi
 
-        if [[ -z "${first_pane_of_window[$orig_name]:-}" ]]; then
+        # Source window is dead. Group by orig_id when we have one (so
+        # same-name siblings stay distinct), falling back to name for panes
+        # gathered by older versions that didn't record an id.
+        local group_key="${orig_id:-name:$orig_name}"
+
+        if [[ -z "${first_pane_of_window[$group_key]:-}" ]]; then
             tmux break-pane -d -s "$pane_id" -n "$orig_name"
             # The pane's id survives break-pane; record it as the join target
             # for any siblings from the same source window.
-            first_pane_of_window[$orig_name]="$pane_id"
+            first_pane_of_window[$group_key]="$pane_id"
             if [[ -n "${orig_index:-}" ]]; then
                 local new_win_id
                 new_win_id=$(tmux display-message -p -t "$pane_id" '#{window_id}')
                 new_window_for_index[$orig_index]="$new_win_id"
             fi
         else
-            tmux join-pane -s "$pane_id" -t "${first_pane_of_window[$orig_name]}"
+            tmux join-pane -s "$pane_id" -t "${first_pane_of_window[$group_key]}"
         fi
     done <<< "$panes_data"
 

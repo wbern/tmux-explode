@@ -80,6 +80,9 @@ The plugin is two files:
 - `scripts/overview_toggle.sh` — the toggle logic. Re-reads runtime options on
   every invocation.
 
+Run `./tests/visual.sh` to exercise both modes plus the explode/unexplode
+round-trip on an isolated tmux socket.
+
 Issues and PRs welcome.
 
 ## License
