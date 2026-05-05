@@ -1,2 +1,10 @@
 .DS_Store
 *.swp
+
+# Gas Town agent metadata — runtime state for the harness that authored
+# this branch; never belongs in the public repo.
+.beads/
+.claude/
+.runtime/
+mail/
+state.json
