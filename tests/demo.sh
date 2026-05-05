@@ -45,10 +45,21 @@ esac
 unset TMUX TMUX_PANE
 
 label_pane() {
-    local target="$1" label="$2" quoted
+    local target="$1" label="$2" quoted marker i
     quoted=$(printf '%q' "$label")
+    marker=">>> $label <<<"
     "${TMUX_CMD[@]}" send-keys -t "$target" \
         "clear; printf '\\n  >>> %s <<<\\n' $quoted; cat" Enter
+    # Poll until the label is actually rendered, so downstream captures
+    # see the printed marker rather than the still-buffered command line.
+    for i in $(seq 1 50); do
+        if "${TMUX_CMD[@]}" capture-pane -p -t "$target" 2>/dev/null \
+                | grep -qF "$marker"; then
+            return 0
+        fi
+        sleep 0.1
+    done
+    echo "warning: label '$label' did not render in '$target'" >&2
 }
 
 build_session_topology() {
@@ -85,33 +96,40 @@ build_server_topology() {
     label_pane "home:base.0" "HOME"
 }
 
-wait_for_settle() {
-    sleep 0.6  # give shells time to render their labels
+wait_for_panes() {
+    # Poll until $target has at least $min_panes panes.
+    local target_window="$1" min_panes="$2" i count
+    for i in $(seq 1 50); do
+        count=$("${TMUX_CMD[@]}" list-panes -t "$target_window" 2>/dev/null \
+                | wc -l | tr -d ' ')
+        if [[ "$count" -ge "$min_panes" ]]; then
+            return 0
+        fi
+        sleep 0.1
+    done
+    echo "warning: '$target_window' did not reach $min_panes panes" >&2
 }
 
 case "$mode" in
     session)
         build_session_topology
-        wait_for_settle
         "${TMUX_CMD[@]}" set-option -g @explode-mode all
         "${TMUX_CMD[@]}" run-shell -t demo:alpha "$REPO_ROOT/scripts/overview_toggle.sh"
         target="demo:overview"
+        wait_for_panes "$target" 6
         ;;
     server)
         build_server_topology
-        wait_for_settle
         "${TMUX_CMD[@]}" set-option -g @explode-scope server
         "${TMUX_CMD[@]}" run-shell -t home:base "$REPO_ROOT/scripts/overview_toggle.sh"
         target="home:overview"
+        wait_for_panes "$target" 5
         ;;
     *)
         echo "unknown mode: $mode (want 'session' or 'server')" >&2
         exit 2
         ;;
 esac
-
-# Wait for the overview to materialise and the inner attaches/labels to render.
-sleep 1.2
 
 case "$action" in
     attach)

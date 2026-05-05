@@ -112,6 +112,16 @@ Run `./tests/visual.sh` to exercise session scope (both `active` and `all`
 modes), the session-scope round-trip, server scope across multiple sibling
 sessions, and the server-scope round-trip — all on an isolated tmux socket.
 
+For a live demo or to capture screenshots, use `./tests/demo.sh`:
+
+```sh
+./tests/demo.sh server attach                # build a wall and attach to it
+./tests/demo.sh session capture /tmp/explode # headless: dump SVG + per-pane text
+```
+
+Capture mode also writes a colour-preserving HTML overview if
+[`aha`](https://github.com/theZiz/aha) is installed (`brew install aha`).
+
 Issues and PRs welcome.
 
 ## License
