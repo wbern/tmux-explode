@@ -1,0 +1,17 @@
+#!/bin/sh
+# Reject AI-attribution trailers in commit messages.
+#
+# Enable for this clone:
+#   git config core.hooksPath hooks
+#
+# Or run scripts/install-hooks.sh once.
+
+msg_file="$1"
+
+if grep -qiE '^[[:space:]]*Co-Authored-By:.*(Claude|Anthropic|GPT|Copilot)' "$msg_file" \
+   || grep -qiE '^[[:space:]]*Generated with \[?Claude' "$msg_file" \
+   || grep -qiE '^[[:space:]]*🤖' "$msg_file"; then
+    echo "commit-msg: refusing AI-attribution trailer." >&2
+    echo "Strip Co-Authored-By / 'Generated with Claude' / 🤖 lines and retry." >&2
+    exit 1
+fi
