@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Toggle between exploded (all panes tiled in one overview window) and
-# unexploded (panes restored to their original windows).
+# Toggle between exploded (overview window of tiled panes) and unexploded
+# (panes restored to their origins).
 #
 # Runtime options (read fresh on each invocation):
-#   @explode-mode         'active' (default) or 'all'
+#   @explode-scope        'session' (default) or 'server'
+#   @explode-mode         'active' (default) or 'all'    [session-scope only]
 #   @explode-window-name  default 'overview'
 
 set -euo pipefail
@@ -22,15 +23,30 @@ get_tmux_option() {
 
 OVERVIEW=$(get_tmux_option "@explode-window-name" "overview")
 MODE=$(get_tmux_option "@explode-mode" "active")
+SCOPE=$(get_tmux_option "@explode-scope" "session")
 
 # tmux propagates the calling pane's context via run-shell, so plain
 # display-message with no -t reads from the keybinding's source pane, not from
 # whichever window the user has since focused. We deliberately do NOT consult
 # TMUX_PANE here — that env var leaks from any parent shell that happens to be
 # inside a different tmux session.
-CURRENT=$(tmux display-message -p '#W')
-CURRENT_WIN=$(tmux display-message -p '#{window_id}')
-SESSION=$(tmux display-message -p '#{session_id}')
+#
+# The $TMUX env var (set by tmux for run-shell) is reliable in a different
+# way: its trailing field is the firing session's numeric id. Pin
+# display-message to that session so explode and unexplode agree on which
+# session they target — server-scope explode can bump activity on other
+# sessions (e.g. by setting their `status` option), and on a server with
+# no attached client tmux's default-target resolution then drifts to the
+# most-recently-active session, which is no longer the one that fired the
+# binding.
+TARGET_FLAG=()
+if [[ -n "${TMUX:-}" ]]; then
+    TARGET_FLAG=(-t "\$${TMUX##*,}")
+fi
+CURRENT=$(tmux display-message -p "${TARGET_FLAG[@]}" '#W')
+CURRENT_WIN=$(tmux display-message -p "${TARGET_FLAG[@]}" '#{window_id}')
+SESSION=$(tmux display-message -p "${TARGET_FLAG[@]}" '#{session_id}')
+SESSION_NAME=$(tmux display-message -p "${TARGET_FLAG[@]}" '#{session_name}')
 
 # Map from original window index to the new window id created during
 # unexplode. Used to put restored windows back at their original positions.
@@ -169,8 +185,145 @@ explode() {
     tmux select-layout -t "$SESSION:$OVERVIEW" tiled
 }
 
+# ---------------------------------------------------------------------------
+# Server scope: tile every other session as a nested-attach pane in the
+# overview window. Lets the user glance at N agents at once, zoom into one
+# with the built-in `prefix + z`, and toggle off without disturbing those
+# sessions.
+# ---------------------------------------------------------------------------
+
+# Socket the calling tmux server is listening on. We reach inside $TMUX
+# (which has the form '<socket-path>,<server-pid>,<session-id>') so the
+# nested `tmux attach` calls can target the SAME server with `-S`. Without
+# this, an unset $TMUX would send them to the default socket and they'd find
+# nothing.
+SOCKET_PATH="${TMUX%%,*}"
+
+explode_server() {
+    if tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -Fxq "$OVERVIEW"; then
+        tmux display-message "tmux_explode: window '$OVERVIEW' already exists; rename it or set @explode-window-name"
+        return 1
+    fi
+
+    # Collect other sessions, skipping any that already host a server-scope
+    # overview (don't recursively wall-of-walls).
+    local others=()
+    local s
+    while IFS= read -r s; do
+        [[ -z "$s" || "$s" == "$SESSION_NAME" ]] && continue
+        if tmux list-windows -t "$s" -F '#{?@explode-overview,1,}' 2>/dev/null \
+                | grep -Fxq '1'; then
+            continue
+        fi
+        others+=("$s")
+    done < <(tmux list-sessions -F '#{session_name}')
+
+    if (( ${#others[@]} == 0 )); then
+        tmux display-message "tmux_explode: no other sessions to explode"
+        return 1
+    fi
+
+    tmux new-window -t "$SESSION:" -n "$OVERVIEW"
+    tmux set-option -w -t "$SESSION:$OVERVIEW" "@explode-overview" 1
+
+    # The new-window placeholder pane has to stick around until we've split
+    # off our first nested attach (tmux can't kill a window's only pane).
+    local placeholder
+    placeholder=$(tmux list-panes -t "$SESSION:$OVERVIEW" -F '#{pane_id}' | head -1)
+
+    local placeholder_killed=0
+    local name
+    for name in "${others[@]}"; do
+        # Snapshot the target session's status setting so we can restore it
+        # on unexplode. show-options without -g returns ONLY session-local
+        # values — if empty, the session is inheriting the global default
+        # and we record an "unset" marker so we know to re-inherit later.
+        local saved status_line
+        saved=""
+        status_line=$(tmux show-options -t "$name" status 2>/dev/null || true)
+        if [[ -n "$status_line" ]]; then
+            saved=${status_line#status }
+            saved="set:$saved"
+        else
+            saved="unset"
+        fi
+        tmux set-option -t "$name" status off
+
+        # Build the inner command. printf %q quotes session names (and the
+        # socket path) safely for the shell that tmux spawns under the new
+        # pane. The leading `unset TMUX` is what lets tmux nest — split-window's
+        # `-e TMUX` flag is unreliable across versions (3.6a leaves the var
+        # set; some readings of -e treat it as "set to empty" rather than
+        # "unset"), so we do the unset in the shell where it's portable.
+        local q_name q_sock cmd
+        q_name=$(printf '%q' "$name")
+        q_sock=$(printf '%q' "$SOCKET_PATH")
+        cmd="unset TMUX; exec tmux -S $q_sock attach -t $q_name"
+
+        local new_pane
+        new_pane=$(tmux split-window -t "$SESSION:$OVERVIEW" \
+                   -P -F '#{pane_id}' "$cmd")
+
+        tmux set-option -p -t "$new_pane" "@orig_session" "$name"
+        tmux set-option -p -t "$new_pane" "@orig_session_status" "$saved"
+
+        if (( placeholder_killed == 0 )) && [[ -n "$placeholder" ]]; then
+            tmux kill-pane -t "$placeholder"
+            placeholder_killed=1
+        fi
+        tmux select-layout -t "$SESSION:$OVERVIEW" tiled
+    done
+
+    tmux select-layout -t "$SESSION:$OVERVIEW" tiled
+}
+
+unexplode_server() {
+    local panes_data
+    panes_data=$(tmux list-panes -t "$CURRENT_WIN" \
+                 -F '#{pane_id}'$'\t''#{@orig_session}'$'\t''#{@orig_session_status}')
+
+    local pane_id orig_session saved
+    while IFS=$'\t' read -r pane_id orig_session saved; do
+        [[ -z "${orig_session:-}" ]] && continue
+
+        # Restore the target session's status setting. `unset` means the
+        # session was inheriting the global default — use -u to drop the
+        # session-local override rather than pinning a value.
+        if [[ "${saved:-}" == "unset" ]]; then
+            tmux set-option -u -t "$orig_session" status 2>/dev/null || true
+        elif [[ "${saved:-}" == set:* ]]; then
+            tmux set-option -t "$orig_session" status "${saved#set:}" 2>/dev/null || true
+        fi
+    done <<< "$panes_data"
+
+    # Killing the overview window terminates each pane's `tmux attach` process,
+    # which drops only the nested client we created — other clients attached
+    # to those sessions stay put, and the sessions themselves are untouched.
+    tmux kill-window -t "$CURRENT_WIN"
+}
+
+# Detect what scope produced the current overview by inspecting pane
+# options. This makes unexplode robust against the user toggling
+# @explode-scope between explode and unexplode.
+detect_overview_scope() {
+    local marker
+    marker=$(tmux list-panes -t "$CURRENT_WIN" -F '#{@orig_session}' 2>/dev/null \
+             | grep -v '^$' | head -1 || true)
+    if [[ -n "$marker" ]]; then
+        echo server
+    else
+        echo session
+    fi
+}
+
 if [[ "$CURRENT" == "$OVERVIEW" ]]; then
-    unexplode
+    case "$(detect_overview_scope)" in
+        server) unexplode_server ;;
+        *)      unexplode ;;
+    esac
 else
-    explode
+    case "$SCOPE" in
+        server) explode_server ;;
+        *)      explode ;;
+    esac
 fi

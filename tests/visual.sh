@@ -172,7 +172,14 @@ build_topology() {
 }
 
 run_toggle() {
-    "${TMUX_CMD[@]}" run-shell "$REPO_ROOT/scripts/overview_toggle.sh"
+    # Optional target lets server-scope tests anchor the script to a specific
+    # session — without it, run-shell binds to the most-recently-used pane,
+    # which is ambiguous when multiple sibling sessions exist on the socket.
+    if (( $# > 0 )); then
+        "${TMUX_CMD[@]}" run-shell -t "$1" "$REPO_ROOT/scripts/overview_toggle.sh"
+    else
+        "${TMUX_CMD[@]}" run-shell "$REPO_ROOT/scripts/overview_toggle.sh"
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -234,3 +241,92 @@ else
     echo "--- diff"     >&2; cat /tmp/visual-roundtrip-diff.txt >&2
     exit 1
 fi
+
+# ---------------------------------------------------------------------------
+# Scenario 4: server scope — tile every other session as a nested attach
+# ---------------------------------------------------------------------------
+cleanup
+HOME_SESSION="home"
+"${TMUX_CMD[@]}" new-session -d -s "$HOME_SESSION" -n base -x 120 -y 40
+label_pane "$HOME_SESSION:base.0" "HOME"
+"${TMUX_CMD[@]}" new-session -d -s "sib1" -n w1 -x 120 -y 40
+label_pane "sib1:w1.0" "SIB1"
+"${TMUX_CMD[@]}" new-session -d -s "sib2" -n w2 -x 120 -y 40
+label_pane "sib2:w2.0" "SIB2"
+"${TMUX_CMD[@]}" new-session -d -s "sib3" -n w3 -x 120 -y 40
+label_pane "sib3:w3.0" "SIB3"
+
+# Wait for every pane on the socket to render its label so the nested
+# attaches don't open onto half-painted shells.
+wait_for_markers "$HOME_SESSION" 1
+wait_for_markers "sib1" 1
+wait_for_markers "sib2" 1
+wait_for_markers "sib3" 1
+
+"${TMUX_CMD[@]}" set-option -g @explode-scope server
+run_toggle "$HOME_SESSION:base"
+
+OVERVIEW=$(wait_for_window "$HOME_SESSION" overview) \
+    || { echo "FAIL [server] no overview window after explode" >&2; exit 1; }
+
+# Wait for all 3 nested-attach panes to materialise. tmux split-window
+# returns immediately, so we loop until pane count stabilises.
+deadline=$((SECONDS + 5))
+while (( SECONDS < deadline )); do
+    pane_count=$("${TMUX_CMD[@]}" list-panes -t "$OVERVIEW" -F '#{pane_id}' | wc -l | tr -d ' ')
+    (( pane_count >= 3 )) && break
+    sleep 0.1
+done
+if (( pane_count != 3 )); then
+    echo "FAIL [server] expected 3 panes in overview, got $pane_count" >&2
+    exit 1
+fi
+
+# Each pane should carry an @orig_session pointing at one of the siblings.
+ORIG_SESSIONS=$("${TMUX_CMD[@]}" list-panes -t "$OVERVIEW" -F '#{@orig_session}' | sort)
+EXPECTED_SESSIONS=$(printf 'sib1\nsib2\nsib3\n')
+if [[ "$ORIG_SESSIONS" != "$EXPECTED_SESSIONS" ]]; then
+    echo "FAIL [server] overview panes don't map to sibling sessions" >&2
+    echo "--- expected" >&2; echo "$EXPECTED_SESSIONS" >&2
+    echo "--- actual"   >&2; echo "$ORIG_SESSIONS"     >&2
+    exit 1
+fi
+
+# The window itself should advertise the @explode-overview marker so external
+# tools (resurrect, witnesses, continuum) can recognise and skip it.
+MARKER=$("${TMUX_CMD[@]}" show-options -w -t "$OVERVIEW" -v "@explode-overview" 2>/dev/null || true)
+if [[ "$MARKER" != "1" ]]; then
+    echo "FAIL [server] @explode-overview marker missing on overview window" >&2
+    exit 1
+fi
+echo "PASS [server] overview has 3 panes, all sibling sessions attached, marker set"
+
+# Round-trip: unexplode should drop the wall, leave every sibling session alive,
+# and clear the marker.
+run_toggle "$HOME_SESSION:overview"
+wait_for_window_gone "$HOME_SESSION" overview \
+    || { echo "FAIL [server round-trip] overview still present after unexplode" >&2; exit 1; }
+
+REMAINING=$("${TMUX_CMD[@]}" list-sessions -F '#{session_name}' | sort)
+EXPECTED_REMAINING=$(printf 'home\nsib1\nsib2\nsib3\n')
+if [[ "$REMAINING" != "$EXPECTED_REMAINING" ]]; then
+    echo "FAIL [server round-trip] sibling sessions changed after unexplode" >&2
+    echo "--- expected" >&2; echo "$EXPECTED_REMAINING" >&2
+    echo "--- actual"   >&2; echo "$REMAINING"          >&2
+    exit 1
+fi
+
+# `tmux list-clients` shows attached terminals. After unexplode there should
+# be no nested clients pointing at any sibling session — the only clients on
+# the socket are the test harness's own (typically zero in CI).
+NESTED_CLIENTS=$("${TMUX_CMD[@]}" list-clients -F '#{client_session}' \
+                 | grep -E '^sib[123]$' || true)
+if [[ -n "$NESTED_CLIENTS" ]]; then
+    echo "FAIL [server round-trip] orphan nested clients remain:" >&2
+    echo "$NESTED_CLIENTS" >&2
+    exit 1
+fi
+echo "PASS [server round-trip] overview gone, sessions intact, no orphan clients"
+
+# Reset the global option so it doesn't leak into any later scenarios.
+"${TMUX_CMD[@]}" set-option -gu @explode-scope
