@@ -330,3 +330,76 @@ echo "PASS [server round-trip] overview gone, sessions intact, no orphan clients
 
 # Reset the global option so it doesn't leak into any later scenarios.
 "${TMUX_CMD[@]}" set-option -gu @explode-scope
+
+# ---------------------------------------------------------------------------
+# Scenario 5: server scope with only the home session — should refuse
+# ---------------------------------------------------------------------------
+cleanup
+"${TMUX_CMD[@]}" new-session -d -s "$HOME_SESSION" -n base -x 120 -y 40
+label_pane "$HOME_SESSION:base.0" "HOME"
+wait_for_markers "$HOME_SESSION" 1
+
+"${TMUX_CMD[@]}" set-option -g @explode-scope server
+run_toggle "$HOME_SESSION:base"
+
+# Brief grace period for the script to settle. With no siblings the script
+# emits a status-line message and exits without creating the overview.
+sleep 0.3
+if "${TMUX_CMD[@]}" list-windows -t "$HOME_SESSION" -F '#{window_name}' \
+        | grep -Fxq overview; then
+    echo "FAIL [server lone] overview window created when no siblings exist" >&2
+    exit 1
+fi
+echo "PASS [server lone] overview not created when no other sessions exist"
+"${TMUX_CMD[@]}" set-option -gu @explode-scope
+
+# ---------------------------------------------------------------------------
+# Scenario 6: server scope round-trip restores explicit session-local status
+#
+# When a sibling has its `status` option set session-locally (not inherited),
+# the unexplode path must restore that exact value, not drop the override.
+# ---------------------------------------------------------------------------
+cleanup
+"${TMUX_CMD[@]}" new-session -d -s "$HOME_SESSION" -n base -x 120 -y 40
+label_pane "$HOME_SESSION:base.0" "HOME"
+"${TMUX_CMD[@]}" new-session -d -s "sibset" -n w -x 120 -y 40
+label_pane "sibset:w.0" "SIBSET"
+wait_for_markers "$HOME_SESSION" 1
+wait_for_markers "sibset" 1
+
+# Pin the sibling's status to a non-default value (something we can detect
+# and that isn't the global default 'on'). 'off' is the cleanest choice but
+# would coincide with what explode_server sets — pick '2' (a 2-line status
+# bar) so we can tell the original from the explode-time override.
+"${TMUX_CMD[@]}" set-option -t sibset status 2
+PRE_STATUS=$("${TMUX_CMD[@]}" show-options -t sibset -v status)
+if [[ "$PRE_STATUS" != "2" ]]; then
+    echo "FAIL [server status restore] precondition: expected status=2, got '$PRE_STATUS'" >&2
+    exit 1
+fi
+
+"${TMUX_CMD[@]}" set-option -g @explode-scope server
+run_toggle "$HOME_SESSION:base"
+wait_for_window "$HOME_SESSION" overview > /dev/null \
+    || { echo "FAIL [server status restore] no overview" >&2; exit 1; }
+
+DURING=$("${TMUX_CMD[@]}" show-options -t sibset -v status)
+if [[ "$DURING" != "off" ]]; then
+    echo "FAIL [server status restore] expected status=off during explode, got '$DURING'" >&2
+    exit 1
+fi
+
+run_toggle "$HOME_SESSION:overview"
+wait_for_window_gone "$HOME_SESSION" overview \
+    || { echo "FAIL [server status restore] overview persisted" >&2; exit 1; }
+
+POST_STATUS=$("${TMUX_CMD[@]}" show-options -t sibset -v status)
+if [[ "$POST_STATUS" != "$PRE_STATUS" ]]; then
+    echo "FAIL [server status restore] sibling status not restored" >&2
+    echo "--- before: $PRE_STATUS" >&2
+    echo "--- after:  $POST_STATUS" >&2
+    exit 1
+fi
+echo "PASS [server status restore] session-local status round-trips through explode"
+
+"${TMUX_CMD[@]}" set-option -gu @explode-scope

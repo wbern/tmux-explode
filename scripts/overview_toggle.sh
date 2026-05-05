@@ -139,7 +139,7 @@ explode() {
     # can rename it or change @explode-window-name and try again.
     if tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -Fxq "$OVERVIEW"; then
         tmux display-message "tmux_explode: window '$OVERVIEW' already exists; rename it or set @explode-window-name"
-        return 1
+        return 0
     fi
 
     tmux new-window -t "$SESSION:" -n "$OVERVIEW"
@@ -202,7 +202,7 @@ SOCKET_PATH="${TMUX%%,*}"
 explode_server() {
     if tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -Fxq "$OVERVIEW"; then
         tmux display-message "tmux_explode: window '$OVERVIEW' already exists; rename it or set @explode-window-name"
-        return 1
+        return 0
     fi
 
     # Collect other sessions, skipping any that already host a server-scope
@@ -220,7 +220,7 @@ explode_server() {
 
     if (( ${#others[@]} == 0 )); then
         tmux display-message "tmux_explode: no other sessions to explode"
-        return 1
+        return 0
     fi
 
     tmux new-window -t "$SESSION:" -n "$OVERVIEW"
