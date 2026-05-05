@@ -21,3 +21,17 @@ the tracked `hooks/` directory.
   Comments only for non-obvious *why* (a workaround, a tmux quirk, an
   invariant that isn't visible from the code).
 - Prefer editing existing files over creating new ones.
+
+## Heads-up for future sessions
+
+- **Author identity**: commits must be `wbern <wbern@users.noreply.github.com>`.
+  Local repo config is already set; if you're in a fresh clone, set it before
+  committing or you'll inherit whatever the surrounding harness configured.
+- **Repo name quirk**: the directory and local `origin` URL say `tmux_explore`,
+  but the canonical GitHub repo is `wbern/tmux-explode` (GitHub redirects the
+  old name). Use `tmux-explode` in any user-facing snippet (README, install
+  instructions, CI badges).
+- **Gas Town artifacts in the working tree**: `.beads/`, `.claude/`,
+  `.runtime/`, `mail/`, and `state.json` are runtime state from the agent
+  harness that authored this branch. Gitignored. Don't try to "tidy" them
+  into the repo — they don't belong.
