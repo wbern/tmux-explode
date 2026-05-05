@@ -5,6 +5,12 @@ window of split panes, then "unexplodes" them back to their original windows.
 One keybinding to glance at every running terminal at once, then return to
 focused work.
 
+![demo](docs/demo.gif)
+
+(Server-scope wall: five sibling sessions tiled into one overview, recorded
+in a Linux container. Reproduce with `docker build -f tests/Dockerfile.record
+-t tmux-explode-record . && docker run --rm -it tmux-explode-record`.)
+
 ## Install
 
 ### Via [TPM](https://github.com/tmux-plugins/tpm) (recommended)
