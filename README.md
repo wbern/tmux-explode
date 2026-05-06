@@ -66,9 +66,9 @@ re-sourcing `tmux.conf`.
 | `@explode-scope`        | `all`       | `all` = current session's other windows AND nested attaches to every other session, in the current window. `session` = only the current session's windows (uses an `overview` tab). `server` = only nested attaches to other sessions, in the current window. |
 | `@explode-mode`         | `active`    | `active` = gather only the active pane of each gathered window. `all` = sweep every pane. Applies to local-window gathering in `all` and `session` scopes; ignored when `@explode-scope = server`. |
 | `@explode-window-name`  | `overview`  | Name used for the overview window in **session scope** only. `all` and `server` scopes split the current window in place and ignore this option. |
-| `@explode-style-anchor` | `fg=yellow,bold` | Inline style for the anchor tile's border label (the pane the toggle fired from). In-place walls only. |
-| `@explode-style-local`  | `fg=cyan`   | Inline style for tiles gathered from other windows of the current session. In-place walls only. |
-| `@explode-style-remote` | `fg=magenta` | Inline style for nested-attach tiles pointing at sibling sessions. In-place walls only. |
+| `@explode-style-anchor` | `fg=yellow,bold` | Style applied to the anchor tile's border label (the pane the toggle fired from). Colors the label only — the border line itself is unchanged. In-place walls only. |
+| `@explode-style-local`  | `fg=cyan`   | Style applied to the labels of tiles gathered from other windows of the current session. In-place walls only. |
+| `@explode-style-remote` | `fg=magenta` | Style applied to the labels of nested-attach tiles pointing at sibling sessions. In-place walls only. |
 
 Example:
 
@@ -102,13 +102,15 @@ set -g @explode-window-name 'glance'
   extra tab to navigate, and a single-window session can never be
   collapsed by the toggle.
 - Each tile gets a labelled border (`pane-border-status top`) so you can
-  tell at a glance what's where: `◉ here` for the anchor pane (yellow),
+  tell at a glance what's where. The label text is colored, not the
+  border line itself: a yellow `◉ here` for the anchor pane, a cyan
   `◫ <window>` for a local pane gathered from another window of the
-  current session (cyan), `⇄ <session>` for a nested attach into a
-  sibling session (magenta). Override colours with the
+  current session, and a magenta `⇄ <session>` for a nested attach into
+  a sibling session. Override the label styles with the
   `@explode-style-*` options. Both `pane-border-status` and
   `pane-border-format` are saved before the wall goes up and restored on
-  toggle-off.
+  toggle-off — including any custom value you already had on that
+  window.
 - Added panes are tagged with the per-pane user option `@orig_session`
   (nested attaches) or `@orig_window` (panes gathered from windows of the
   current session). Toggle-off uses those tags to kill nested attaches and

@@ -675,3 +675,49 @@ fi
 echo "PASS [tile labels round-trip] window-scoped border options cleared"
 
 "${TMUX_CMD[@]}" set-option -gu @explode-scope
+
+# ---------------------------------------------------------------------------
+# Scenario 10: pre-existing pane-border-format / pane-border-status on the
+# firing window must round-trip across a toggle cycle. The save path uses
+# `show-options -wqv` to avoid round-tripping tmux's literal-quote wrapper
+# around values containing spaces — this scenario locks that in. A multi-word
+# format with spaces and a `#{...}` substitution exercises both pitfalls.
+# ---------------------------------------------------------------------------
+cleanup
+"${TMUX_CMD[@]}" new-session -d -s "$HOME_SESSION" -n base -x 120 -y 40
+label_pane "$HOME_SESSION:base.0" "HOME"
+"${TMUX_CMD[@]}" new-session -d -s "sib1" -n w1 -x 120 -y 40
+label_pane "sib1:w1.0" "SIB1"
+wait_for_markers "$HOME_SESSION" 1
+wait_for_markers "sib1" 1
+
+BASE_WIN=$("${TMUX_CMD[@]}" display-message -p -t "$HOME_SESSION:base" '#{window_id}')
+
+CUSTOM_FORMAT='[#{pane_index}] #{pane_current_command}'
+"${TMUX_CMD[@]}" set-option -w -t "$BASE_WIN" pane-border-status bottom
+"${TMUX_CMD[@]}" set-option -w -t "$BASE_WIN" pane-border-format "$CUSTOM_FORMAT"
+
+"${TMUX_CMD[@]}" set-option -g @explode-scope server
+run_toggle "$HOME_SESSION:base"
+wait_for_pane_count "$BASE_WIN" 2 \
+    || { echo "FAIL [custom-format round-trip] explode never reached 2 panes" >&2; exit 1; }
+
+run_toggle "$HOME_SESSION:base"
+wait_for_pane_count "$BASE_WIN" 1 \
+    || { echo "FAIL [custom-format round-trip] unexplode never reduced to 1 pane" >&2; exit 1; }
+
+POST_STATUS=$("${TMUX_CMD[@]}" show-options -wqv -t "$BASE_WIN" pane-border-status)
+POST_FORMAT=$("${TMUX_CMD[@]}" show-options -wqv -t "$BASE_WIN" pane-border-format)
+if [[ "$POST_STATUS" != "bottom" ]]; then
+    echo "FAIL [custom-format round-trip] expected status=bottom, got '$POST_STATUS'" >&2
+    exit 1
+fi
+if [[ "$POST_FORMAT" != "$CUSTOM_FORMAT" ]]; then
+    echo "FAIL [custom-format round-trip] format mangled by save/restore" >&2
+    echo "  expected: $CUSTOM_FORMAT" >&2
+    echo "  actual:   $POST_FORMAT" >&2
+    exit 1
+fi
+echo "PASS [custom-format round-trip] custom pane-border-format/status preserved"
+
+"${TMUX_CMD[@]}" set-option -gu @explode-scope

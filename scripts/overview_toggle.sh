@@ -217,27 +217,29 @@ WALL_STYLE_REMOTE=$(get_tmux_option "@explode-style-remote" "fg=magenta")
 # so a literal comma (e.g. `fg=yellow,bold`) inside `#[...]` markup has to
 # be escaped as `#,`. Escape the user-supplied style strings before
 # substituting them in.
-escape_fmt_commas() { printf '%s' "$1" | sed 's/,/#,/g'; }
-WALL_FMT_ANCHOR=$(escape_fmt_commas "$WALL_STYLE_ANCHOR")
-WALL_FMT_LOCAL=$(escape_fmt_commas "$WALL_STYLE_LOCAL")
-WALL_FMT_REMOTE=$(escape_fmt_commas "$WALL_STYLE_REMOTE")
+WALL_FMT_ANCHOR=${WALL_STYLE_ANCHOR//,/#,}
+WALL_FMT_LOCAL=${WALL_STYLE_LOCAL//,/#,}
+WALL_FMT_REMOTE=${WALL_STYLE_REMOTE//,/#,}
 WALL_BORDER_FORMAT=" #{?@orig_session,#[${WALL_FMT_REMOTE}]⇄ #{@orig_session},#{?@orig_window,#[${WALL_FMT_LOCAL}]◫ #{@orig_window},#[${WALL_FMT_ANCHOR}]◉ here}} "
 
 # Save the current window-scoped border options on the wall window itself so
-# unexplode can put them back. We use the same set:/unset marker convention
-# as the per-session status save/restore.
+# unexplode can put them back. `-wqv` returns just the value (unwrapped — tmux
+# wraps complex values in literal double quotes when show-options prints the
+# `name "value"` form, and we don't want those quotes round-tripping into
+# set-option). Empty value means unset on the window; the `unset` marker tells
+# teardown to drop the override rather than pin a value.
 setup_wall_borders() {
     local prev
-    prev=$(tmux show-options -w -t "$CURRENT_WIN" pane-border-status 2>/dev/null || true)
+    prev=$(tmux show-options -wqv -t "$CURRENT_WIN" pane-border-status 2>/dev/null || true)
     if [[ -n "$prev" ]]; then
-        tmux set-option -w -t "$CURRENT_WIN" "@explode_saved_border_status" "set:${prev#pane-border-status }"
+        tmux set-option -w -t "$CURRENT_WIN" "@explode_saved_border_status" "set:$prev"
     else
         tmux set-option -w -t "$CURRENT_WIN" "@explode_saved_border_status" "unset"
     fi
 
-    prev=$(tmux show-options -w -t "$CURRENT_WIN" pane-border-format 2>/dev/null || true)
+    prev=$(tmux show-options -wqv -t "$CURRENT_WIN" pane-border-format 2>/dev/null || true)
     if [[ -n "$prev" ]]; then
-        tmux set-option -w -t "$CURRENT_WIN" "@explode_saved_border_format" "set:${prev#pane-border-format }"
+        tmux set-option -w -t "$CURRENT_WIN" "@explode_saved_border_format" "set:$prev"
     else
         tmux set-option -w -t "$CURRENT_WIN" "@explode_saved_border_format" "unset"
     fi
