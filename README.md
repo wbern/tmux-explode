@@ -47,9 +47,10 @@ Reload tmux: `tmux source-file ~/.tmux.conf`.
   Panes that originated from the same source window are grouped back together.
 
 Set `@explode-scope 'server'` to gather every **other session** on the tmux
-server instead — each session becomes a nested-attach pane in the overview,
-giving you a live wall of every running tmux session that you can glance at,
-zoom into one with `prefix + z`, and toggle off again.
+server instead — each session becomes a nested-attach pane added to the
+**current window in place** (no new window is created), giving you a live
+wall of every running tmux session alongside your original pane. Zoom into
+one with `prefix + z`, and toggle off again to drop the added panes.
 
 ## Configuration
 
@@ -61,7 +62,7 @@ re-sourcing `tmux.conf`.
 | `@explode-key`          | `O`         | Key bound under `prefix` to trigger the toggle.                      |
 | `@explode-scope`        | `session`   | `session` = gather panes from the current session's windows. `server` = gather every **other** session on the tmux server (one nested-attach pane per session). |
 | `@explode-mode`         | `active`    | `active` = gather only the active pane of each window. `all` = sweep every pane. (Session scope only — ignored when `@explode-scope = server`.) |
-| `@explode-window-name`  | `overview`  | Name used for the overview window. Change if it collides with a window you already use. |
+| `@explode-window-name`  | `overview`  | Name used for the overview window in **session scope**. Server scope splits the current window in place and ignores this option. |
 
 Example:
 
@@ -88,9 +89,13 @@ set -g @explode-window-name 'glance'
 
 ### Server-scope notes
 
-- The overview window is tagged with the user option `@explode-overview` so
-  external tools can detect and skip it (the script itself uses this to avoid
-  recursing into another wall).
+- The wall is built **in place** by splitting the calling window. Your
+  original pane stays put as one tile; sibling sessions are added as new
+  panes alongside it. Toggling off kills the added panes and restores your
+  original pane to the full window — no extra tab to navigate, and a
+  single-window session can never be collapsed by the toggle.
+- Added panes are tagged with the per-pane user option `@orig_session`,
+  pointing at the session each one is attached to.
 - Each spawned pane runs `tmux attach -t <session>` against the same socket.
   tmux's prefix collision is **not** worked around — to send `prefix` (default
   `C-b`) to a focused inner session, press it twice (`C-b C-b`).
@@ -101,10 +106,8 @@ set -g @explode-window-name 'glance'
   [tmux-continuum](https://github.com/tmux-plugins/tmux-continuum) are the
   only real footgun: an autosave that fires while a server-scope wall is
   exploded will capture the nested attaches and try to restore them on
-  startup. The `@explode-overview` marker is here to give those plugins a
-  hook for skipping the window — but at time of writing, neither honours
-  it. Toggle the wall off before letting an autosave run, or pause continuum
-  while you have one open.
+  startup. Toggle the wall off before letting an autosave run, or pause
+  continuum while you have one open.
 
 ## Development
 

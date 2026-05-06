@@ -18,8 +18,11 @@ SOCKET="tmux_explode_visual_test"
 # Use an isolated socket so we never touch the user's running tmux. Also
 # unset TMUX so tmux won't refuse to nest, and clear TMUX_PANE so the
 # toggle script's display-message context isn't poisoned by a leaked id.
+# `-f /dev/null` keeps ~/.tmux.conf out of the test server — otherwise any
+# user-level @explode-* option leaks into the harness and the assertions
+# misfire.
 unset TMUX TMUX_PANE
-TMUX_CMD=(tmux -L "$SOCKET")
+TMUX_CMD=(tmux -f /dev/null -L "$SOCKET")
 
 cleanup() {
     "${TMUX_CMD[@]}" kill-server 2>/dev/null || true
@@ -243,7 +246,11 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Scenario 4: server scope — tile every other session as a nested attach
+# Scenario 4: server scope splits the current window in place
+#
+# No new "overview" window is created — sibling sessions are added as panes
+# alongside the original pane in the calling window. Unexplode kills the
+# added panes and leaves the original alone.
 # ---------------------------------------------------------------------------
 cleanup
 HOME_SESSION="home"
@@ -256,56 +263,67 @@ label_pane "sib2:w2.0" "SIB2"
 "${TMUX_CMD[@]}" new-session -d -s "sib3" -n w3 -x 120 -y 40
 label_pane "sib3:w3.0" "SIB3"
 
-# Wait for every pane on the socket to render its label so the nested
-# attaches don't open onto half-painted shells.
 wait_for_markers "$HOME_SESSION" 1
 wait_for_markers "sib1" 1
 wait_for_markers "sib2" 1
 wait_for_markers "sib3" 1
 
+BASE_WIN=$("${TMUX_CMD[@]}" display-message -p -t "$HOME_SESSION:base" '#{window_id}')
+WINDOW_COUNT_BEFORE=$("${TMUX_CMD[@]}" list-windows -t "$HOME_SESSION" -F '#{window_id}' | wc -l | tr -d ' ')
+
 "${TMUX_CMD[@]}" set-option -g @explode-scope server
 run_toggle "$HOME_SESSION:base"
 
-OVERVIEW=$(wait_for_window "$HOME_SESSION" overview) \
-    || { echo "FAIL [server] no overview window after explode" >&2; exit 1; }
-
-# Wait for all 3 nested-attach panes to materialise. tmux split-window
-# returns immediately, so we loop until pane count stabilises.
+# Wait for all 3 nested-attach panes to materialise alongside the original.
 deadline=$((SECONDS + 5))
 while (( SECONDS < deadline )); do
-    pane_count=$("${TMUX_CMD[@]}" list-panes -t "$OVERVIEW" -F '#{pane_id}' | wc -l | tr -d ' ')
-    (( pane_count >= 3 )) && break
+    pane_count=$("${TMUX_CMD[@]}" list-panes -t "$BASE_WIN" -F '#{pane_id}' | wc -l | tr -d ' ')
+    (( pane_count >= 4 )) && break
     sleep 0.1
 done
-if (( pane_count != 3 )); then
-    echo "FAIL [server] expected 3 panes in overview, got $pane_count" >&2
+if (( pane_count != 4 )); then
+    echo "FAIL [server] expected 4 panes in base window, got $pane_count" >&2
     exit 1
 fi
 
-# Each pane should carry an @orig_session pointing at one of the siblings.
-ORIG_SESSIONS=$("${TMUX_CMD[@]}" list-panes -t "$OVERVIEW" -F '#{@orig_session}' | sort)
+# No new window should have been created.
+WINDOW_COUNT_AFTER=$("${TMUX_CMD[@]}" list-windows -t "$HOME_SESSION" -F '#{window_id}' | wc -l | tr -d ' ')
+if (( WINDOW_COUNT_AFTER != WINDOW_COUNT_BEFORE )); then
+    echo "FAIL [server] window count changed: $WINDOW_COUNT_BEFORE → $WINDOW_COUNT_AFTER" >&2
+    exit 1
+fi
+if "${TMUX_CMD[@]}" list-windows -t "$HOME_SESSION" -F '#{window_name}' | grep -Fxq overview; then
+    echo "FAIL [server] overview window created — should split current window in place" >&2
+    exit 1
+fi
+
+# Three panes should carry an @orig_session pointing at one of the siblings;
+# the original pane should NOT have @orig_session set.
+ORIG_SESSIONS=$("${TMUX_CMD[@]}" list-panes -t "$BASE_WIN" -F '#{@orig_session}' \
+                | grep -v '^$' | sort)
 EXPECTED_SESSIONS=$(printf 'sib1\nsib2\nsib3\n')
 if [[ "$ORIG_SESSIONS" != "$EXPECTED_SESSIONS" ]]; then
-    echo "FAIL [server] overview panes don't map to sibling sessions" >&2
+    echo "FAIL [server] added panes don't map to sibling sessions" >&2
     echo "--- expected" >&2; echo "$EXPECTED_SESSIONS" >&2
     echo "--- actual"   >&2; echo "$ORIG_SESSIONS"     >&2
     exit 1
 fi
+echo "PASS [server] base window has 4 panes (1 original + 3 attaches), no new window"
 
-# The window itself should advertise the @explode-overview marker so external
-# tools (resurrect, witnesses, continuum) can recognise and skip it.
-MARKER=$("${TMUX_CMD[@]}" show-options -w -t "$OVERVIEW" -v "@explode-overview" 2>/dev/null || true)
-if [[ "$MARKER" != "1" ]]; then
-    echo "FAIL [server] @explode-overview marker missing on overview window" >&2
+# Round-trip: unexplode should drop the added panes, leave every sibling
+# session alive, and leave the base window with exactly its original pane.
+run_toggle "$HOME_SESSION:base"
+
+deadline=$((SECONDS + 5))
+while (( SECONDS < deadline )); do
+    pane_count=$("${TMUX_CMD[@]}" list-panes -t "$BASE_WIN" -F '#{pane_id}' | wc -l | tr -d ' ')
+    (( pane_count == 1 )) && break
+    sleep 0.1
+done
+if (( pane_count != 1 )); then
+    echo "FAIL [server round-trip] expected 1 pane after unexplode, got $pane_count" >&2
     exit 1
 fi
-echo "PASS [server] overview has 3 panes, all sibling sessions attached, marker set"
-
-# Round-trip: unexplode should drop the wall, leave every sibling session alive,
-# and clear the marker.
-run_toggle "$HOME_SESSION:overview"
-wait_for_window_gone "$HOME_SESSION" overview \
-    || { echo "FAIL [server round-trip] overview still present after unexplode" >&2; exit 1; }
 
 REMAINING=$("${TMUX_CMD[@]}" list-sessions -F '#{session_name}' | sort)
 EXPECTED_REMAINING=$(printf 'home\nsib1\nsib2\nsib3\n')
@@ -316,9 +334,6 @@ if [[ "$REMAINING" != "$EXPECTED_REMAINING" ]]; then
     exit 1
 fi
 
-# `tmux list-clients` shows attached terminals. After unexplode there should
-# be no nested clients pointing at any sibling session — the only clients on
-# the socket are the test harness's own (typically zero in CI).
 NESTED_CLIENTS=$("${TMUX_CMD[@]}" list-clients -F '#{client_session}' \
                  | grep -E '^sib[123]$' || true)
 if [[ -n "$NESTED_CLIENTS" ]]; then
@@ -326,9 +341,8 @@ if [[ -n "$NESTED_CLIENTS" ]]; then
     echo "$NESTED_CLIENTS" >&2
     exit 1
 fi
-echo "PASS [server round-trip] overview gone, sessions intact, no orphan clients"
+echo "PASS [server round-trip] base window restored, sessions intact, no orphan clients"
 
-# Reset the global option so it doesn't leak into any later scenarios.
 "${TMUX_CMD[@]}" set-option -gu @explode-scope
 
 # ---------------------------------------------------------------------------
@@ -339,25 +353,26 @@ cleanup
 label_pane "$HOME_SESSION:base.0" "HOME"
 wait_for_markers "$HOME_SESSION" 1
 
+BASE_WIN=$("${TMUX_CMD[@]}" display-message -p -t "$HOME_SESSION:base" '#{window_id}')
+
 "${TMUX_CMD[@]}" set-option -g @explode-scope server
 run_toggle "$HOME_SESSION:base"
 
-# Brief grace period for the script to settle. With no siblings the script
-# emits a status-line message and exits without creating the overview.
 sleep 0.3
-if "${TMUX_CMD[@]}" list-windows -t "$HOME_SESSION" -F '#{window_name}' \
-        | grep -Fxq overview; then
+LONE_PANES=$("${TMUX_CMD[@]}" list-panes -t "$BASE_WIN" -F '#{pane_id}' | wc -l | tr -d ' ')
+if (( LONE_PANES != 1 )); then
+    echo "FAIL [server lone] base window altered when no siblings exist (panes=$LONE_PANES)" >&2
+    exit 1
+fi
+if "${TMUX_CMD[@]}" list-windows -t "$HOME_SESSION" -F '#{window_name}' | grep -Fxq overview; then
     echo "FAIL [server lone] overview window created when no siblings exist" >&2
     exit 1
 fi
-echo "PASS [server lone] overview not created when no other sessions exist"
+echo "PASS [server lone] no panes added, no window created when no other sessions exist"
 "${TMUX_CMD[@]}" set-option -gu @explode-scope
 
 # ---------------------------------------------------------------------------
 # Scenario 6: server scope round-trip restores explicit session-local status
-#
-# When a sibling has its `status` option set session-locally (not inherited),
-# the unexplode path must restore that exact value, not drop the override.
 # ---------------------------------------------------------------------------
 cleanup
 "${TMUX_CMD[@]}" new-session -d -s "$HOME_SESSION" -n base -x 120 -y 40
@@ -367,10 +382,8 @@ label_pane "sibset:w.0" "SIBSET"
 wait_for_markers "$HOME_SESSION" 1
 wait_for_markers "sibset" 1
 
-# Pin the sibling's status to a non-default value (something we can detect
-# and that isn't the global default 'on'). 'off' is the cleanest choice but
-# would coincide with what explode_server sets — pick '2' (a 2-line status
-# bar) so we can tell the original from the explode-time override.
+BASE_WIN=$("${TMUX_CMD[@]}" display-message -p -t "$HOME_SESSION:base" '#{window_id}')
+
 "${TMUX_CMD[@]}" set-option -t sibset status 2
 PRE_STATUS=$("${TMUX_CMD[@]}" show-options -t sibset -v status)
 if [[ "$PRE_STATUS" != "2" ]]; then
@@ -380,8 +393,17 @@ fi
 
 "${TMUX_CMD[@]}" set-option -g @explode-scope server
 run_toggle "$HOME_SESSION:base"
-wait_for_window "$HOME_SESSION" overview > /dev/null \
-    || { echo "FAIL [server status restore] no overview" >&2; exit 1; }
+
+deadline=$((SECONDS + 5))
+while (( SECONDS < deadline )); do
+    pane_count=$("${TMUX_CMD[@]}" list-panes -t "$BASE_WIN" -F '#{pane_id}' | wc -l | tr -d ' ')
+    (( pane_count == 2 )) && break
+    sleep 0.1
+done
+if (( pane_count != 2 )); then
+    echo "FAIL [server status restore] expected 2 panes after explode, got $pane_count" >&2
+    exit 1
+fi
 
 DURING=$("${TMUX_CMD[@]}" show-options -t sibset -v status)
 if [[ "$DURING" != "off" ]]; then
@@ -389,9 +411,18 @@ if [[ "$DURING" != "off" ]]; then
     exit 1
 fi
 
-run_toggle "$HOME_SESSION:overview"
-wait_for_window_gone "$HOME_SESSION" overview \
-    || { echo "FAIL [server status restore] overview persisted" >&2; exit 1; }
+run_toggle "$HOME_SESSION:base"
+
+deadline=$((SECONDS + 5))
+while (( SECONDS < deadline )); do
+    pane_count=$("${TMUX_CMD[@]}" list-panes -t "$BASE_WIN" -F '#{pane_id}' | wc -l | tr -d ' ')
+    (( pane_count == 1 )) && break
+    sleep 0.1
+done
+if (( pane_count != 1 )); then
+    echo "FAIL [server status restore] expected 1 pane after unexplode, got $pane_count" >&2
+    exit 1
+fi
 
 POST_STATUS=$("${TMUX_CMD[@]}" show-options -t sibset -v status)
 if [[ "$POST_STATUS" != "$PRE_STATUS" ]]; then
@@ -401,5 +432,34 @@ if [[ "$POST_STATUS" != "$PRE_STATUS" ]]; then
     exit 1
 fi
 echo "PASS [server status restore] session-local status round-trips through explode"
+
+"${TMUX_CMD[@]}" set-option -gu @explode-scope
+
+# ---------------------------------------------------------------------------
+# Scenario 7: single-window-session safety
+#
+# A session whose only window is the calling window must survive an
+# explode/unexplode cycle. The previous "create overview window + absorb
+# original pane" design destroyed such sessions on unexplode.
+# ---------------------------------------------------------------------------
+cleanup
+"${TMUX_CMD[@]}" new-session -d -s "$HOME_SESSION" -n base -x 120 -y 40
+label_pane "$HOME_SESSION:base.0" "HOME"
+"${TMUX_CMD[@]}" new-session -d -s "sib1" -n w1 -x 120 -y 40
+label_pane "sib1:w1.0" "SIB1"
+wait_for_markers "$HOME_SESSION" 1
+wait_for_markers "sib1" 1
+
+"${TMUX_CMD[@]}" set-option -g @explode-scope server
+run_toggle "$HOME_SESSION:base"
+sleep 0.3
+run_toggle "$HOME_SESSION:base"
+sleep 0.3
+
+if ! "${TMUX_CMD[@]}" has-session -t "$HOME_SESSION" 2>/dev/null; then
+    echo "FAIL [server single-window safety] home session destroyed by toggle cycle" >&2
+    exit 1
+fi
+echo "PASS [server single-window safety] home session intact after toggle cycle"
 
 "${TMUX_CMD[@]}" set-option -gu @explode-scope
