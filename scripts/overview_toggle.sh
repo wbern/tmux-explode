@@ -203,6 +203,68 @@ explode() {
 # nothing.
 SOCKET_PATH="${TMUX%%,*}"
 
+# Per-tile labeling for the in-place wall. tmux 3.6a treats pane-border-style
+# as window-scoped — `set-option -p` silently falls through to the window
+# option — so we can't tint each border line independently. Instead we tint
+# the LABEL on top of each border via inline `#[fg=...]` markup in
+# pane-border-format, which IS evaluated per-pane against that pane's user
+# options (@orig_session/@orig_window).
+WALL_STYLE_ANCHOR=$(get_tmux_option "@explode-style-anchor" "fg=yellow,bold")
+WALL_STYLE_LOCAL=$(get_tmux_option "@explode-style-local"  "fg=cyan")
+WALL_STYLE_REMOTE=$(get_tmux_option "@explode-style-remote" "fg=magenta")
+
+# Inside a tmux format `#{?...,then,else}` the comma is the case separator,
+# so a literal comma (e.g. `fg=yellow,bold`) inside `#[...]` markup has to
+# be escaped as `#,`. Escape the user-supplied style strings before
+# substituting them in.
+escape_fmt_commas() { printf '%s' "$1" | sed 's/,/#,/g'; }
+WALL_FMT_ANCHOR=$(escape_fmt_commas "$WALL_STYLE_ANCHOR")
+WALL_FMT_LOCAL=$(escape_fmt_commas "$WALL_STYLE_LOCAL")
+WALL_FMT_REMOTE=$(escape_fmt_commas "$WALL_STYLE_REMOTE")
+WALL_BORDER_FORMAT=" #{?@orig_session,#[${WALL_FMT_REMOTE}]⇄ #{@orig_session},#{?@orig_window,#[${WALL_FMT_LOCAL}]◫ #{@orig_window},#[${WALL_FMT_ANCHOR}]◉ here}} "
+
+# Save the current window-scoped border options on the wall window itself so
+# unexplode can put them back. We use the same set:/unset marker convention
+# as the per-session status save/restore.
+setup_wall_borders() {
+    local prev
+    prev=$(tmux show-options -w -t "$CURRENT_WIN" pane-border-status 2>/dev/null || true)
+    if [[ -n "$prev" ]]; then
+        tmux set-option -w -t "$CURRENT_WIN" "@explode_saved_border_status" "set:${prev#pane-border-status }"
+    else
+        tmux set-option -w -t "$CURRENT_WIN" "@explode_saved_border_status" "unset"
+    fi
+
+    prev=$(tmux show-options -w -t "$CURRENT_WIN" pane-border-format 2>/dev/null || true)
+    if [[ -n "$prev" ]]; then
+        tmux set-option -w -t "$CURRENT_WIN" "@explode_saved_border_format" "set:${prev#pane-border-format }"
+    else
+        tmux set-option -w -t "$CURRENT_WIN" "@explode_saved_border_format" "unset"
+    fi
+
+    tmux set-option -w -t "$CURRENT_WIN" pane-border-status top
+    tmux set-option -w -t "$CURRENT_WIN" pane-border-format "$WALL_BORDER_FORMAT"
+}
+
+teardown_wall_borders() {
+    local saved
+    saved=$(tmux show-options -w -t "$CURRENT_WIN" -v "@explode_saved_border_status" 2>/dev/null || true)
+    if [[ "$saved" == set:* ]]; then
+        tmux set-option -w -t "$CURRENT_WIN" pane-border-status "${saved#set:}"
+    elif [[ "$saved" == "unset" ]]; then
+        tmux set-option -w -u -t "$CURRENT_WIN" pane-border-status 2>/dev/null || true
+    fi
+    tmux set-option -w -u -t "$CURRENT_WIN" "@explode_saved_border_status" 2>/dev/null || true
+
+    saved=$(tmux show-options -w -t "$CURRENT_WIN" -v "@explode_saved_border_format" 2>/dev/null || true)
+    if [[ "$saved" == set:* ]]; then
+        tmux set-option -w -t "$CURRENT_WIN" pane-border-format "${saved#set:}"
+    elif [[ "$saved" == "unset" ]]; then
+        tmux set-option -w -u -t "$CURRENT_WIN" pane-border-format 2>/dev/null || true
+    fi
+    tmux set-option -w -u -t "$CURRENT_WIN" "@explode_saved_border_format" 2>/dev/null || true
+}
+
 add_session_attach_pane() {
     local name="$1"
 
@@ -264,6 +326,8 @@ explode_server() {
         return 0
     fi
 
+    setup_wall_borders
+
     local name
     for name in "${others[@]}"; do
         add_session_attach_pane "$name"
@@ -280,7 +344,28 @@ explode_server() {
 # ---------------------------------------------------------------------------
 
 explode_all() {
-    local added=0
+    # Look ahead — if there are no other windows in this session and no
+    # other sessions on the server, there is nothing to gather. Bail before
+    # we've touched any window options.
+    local has_local=0 win_id win_index win_name s
+    while IFS=$'\t' read -r win_id win_index win_name; do
+        [[ "$win_id" == "$CURRENT_WIN" ]] && continue
+        has_local=1
+        break
+    done < <(tmux list-windows -t "$SESSION" -F '#{window_id}'$'\t''#{window_index}'$'\t''#{window_name}')
+
+    local has_remote=0
+    while IFS= read -r s; do
+        has_remote=1
+        break
+    done < <(other_session_names)
+
+    if (( has_local == 0 && has_remote == 0 )); then
+        tmux display-message "tmux_explode: nothing else on the server to explode"
+        return 0
+    fi
+
+    setup_wall_borders
 
     while IFS=$'\t' read -r win_id win_index win_name; do
         [[ "$win_id" == "$CURRENT_WIN" ]] && continue
@@ -300,20 +385,12 @@ explode_all() {
             tmux set-option -p -t "$pane_id" "@orig_window_index" "$win_index"
             tmux join-pane -s "$pane_id" -t "$CURRENT_WIN"
             tmux select-layout -t "$CURRENT_WIN" tiled
-            added=1
         done <<< "$pane_ids"
     done < <(tmux list-windows -t "$SESSION" -F '#{window_id}'$'\t''#{window_index}'$'\t''#{window_name}')
 
-    local s
     while IFS= read -r s; do
         add_session_attach_pane "$s"
-        added=1
     done < <(other_session_names)
-
-    if (( added == 0 )); then
-        tmux display-message "tmux_explode: nothing else on the server to explode"
-        return 0
-    fi
 
     tmux select-layout -t "$CURRENT_WIN" tiled
 }
@@ -378,6 +455,7 @@ unexplode_inplace() {
         fi
     done <<< "$panes_data"
 
+    teardown_wall_borders
     restore_window_order
 }
 

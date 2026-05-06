@@ -577,3 +577,101 @@ fi
 echo "PASS [hybrid round-trip] base restored, extra window back at index $EXTRA_INDEX, sessions intact"
 
 "${TMUX_CMD[@]}" set-option -gu @explode-scope
+
+# ---------------------------------------------------------------------------
+# Scenario 9: per-tile border labels. tmux 3.6a treats pane-border-style as
+# window-scoped, so we color the label inside pane-border-format with inline
+# `#[fg=...]` markup keyed off per-pane @orig_session / @orig_window markers.
+# Test asserts: format string carries each tier's color + glyph, every wall
+# pane renders the right label for its tier, and pane-border-status /
+# pane-border-format are saved+restored cleanly across a toggle cycle.
+# ---------------------------------------------------------------------------
+cleanup
+"${TMUX_CMD[@]}" new-session -d -s "$HOME_SESSION" -n base -x 120 -y 40
+label_pane "$HOME_SESSION:base.0" "HOME"
+"${TMUX_CMD[@]}" new-window -t "$HOME_SESSION:" -n extra
+label_pane "$HOME_SESSION:extra.0" "EXTRA"
+"${TMUX_CMD[@]}" select-window -t "$HOME_SESSION:base"
+"${TMUX_CMD[@]}" new-session -d -s "sib1" -n w1 -x 120 -y 40
+label_pane "sib1:w1.0" "SIB1"
+
+wait_for_markers "$HOME_SESSION" 2
+wait_for_markers "sib1" 1
+
+BASE_WIN=$("${TMUX_CMD[@]}" display-message -p -t "$HOME_SESSION:base" '#{window_id}')
+
+BASELINE_STATUS=$("${TMUX_CMD[@]}" show-options -wqv -t "$BASE_WIN" pane-border-status)
+BASELINE_FORMAT=$("${TMUX_CMD[@]}" show-options -wqv -t "$BASE_WIN" pane-border-format)
+if [[ -n "$BASELINE_STATUS" || -n "$BASELINE_FORMAT" ]]; then
+    echo "FAIL [tile labels] expected clean baseline, got status='$BASELINE_STATUS' format='$BASELINE_FORMAT'" >&2
+    exit 1
+fi
+
+"${TMUX_CMD[@]}" set-option -g @explode-scope all
+run_toggle "$HOME_SESSION:base"
+
+wait_for_pane_count "$BASE_WIN" 3 \
+    || { echo "FAIL [tile labels] explode never reached 3 panes (anchor + local + remote)" >&2; exit 1; }
+
+WALL_STATUS=$("${TMUX_CMD[@]}" show-options -wqv -t "$BASE_WIN" pane-border-status)
+if [[ "$WALL_STATUS" != "top" ]]; then
+    echo "FAIL [tile labels] expected pane-border-status=top while walled, got '$WALL_STATUS'" >&2
+    exit 1
+fi
+
+WALL_FORMAT=$("${TMUX_CMD[@]}" show-options -wqv -t "$BASE_WIN" pane-border-format)
+for needle in "@orig_session" "@orig_window" "fg=yellow#,bold" "fg=cyan" "fg=magenta" "◉ here" "◫" "⇄"; do
+    if [[ "$WALL_FORMAT" != *"$needle"* ]]; then
+        echo "FAIL [tile labels] pane-border-format missing '$needle': '$WALL_FORMAT'" >&2
+        exit 1
+    fi
+done
+
+# Render the saved format in each pane's context — display-message expands
+# format vars (incl. per-pane user options) against the target pane, so we
+# get the actual on-screen label for that tile.
+saw_anchor=0; saw_local=0; saw_remote=0
+while IFS=$'\x1f' read -r pane_id orig_sess orig_win; do
+    [[ -z "$pane_id" ]] && continue
+    rendered=$("${TMUX_CMD[@]}" display-message -p -t "$pane_id" "$WALL_FORMAT")
+    if [[ -n "$orig_sess" ]]; then
+        [[ "$rendered" != *"⇄ $orig_sess"* ]] && {
+            echo "FAIL [tile labels] remote pane $pane_id label missing '⇄ $orig_sess', got '$rendered'" >&2
+            exit 1
+        }
+        saw_remote=1
+    elif [[ -n "$orig_win" ]]; then
+        [[ "$rendered" != *"◫ $orig_win"* ]] && {
+            echo "FAIL [tile labels] local pane $pane_id label missing '◫ $orig_win', got '$rendered'" >&2
+            exit 1
+        }
+        saw_local=1
+    else
+        [[ "$rendered" != *"◉ here"* ]] && {
+            echo "FAIL [tile labels] anchor pane $pane_id label missing '◉ here', got '$rendered'" >&2
+            exit 1
+        }
+        saw_anchor=1
+    fi
+done < <("${TMUX_CMD[@]}" list-panes -t "$BASE_WIN" \
+         -F $'#{pane_id}\x1f#{@orig_session}\x1f#{@orig_window}')
+
+if (( saw_anchor == 0 || saw_local == 0 || saw_remote == 0 )); then
+    echo "FAIL [tile labels] missing tier — anchor=$saw_anchor local=$saw_local remote=$saw_remote" >&2
+    exit 1
+fi
+echo "PASS [tile labels] anchor/local/remote tiles render distinct labels"
+
+run_toggle "$HOME_SESSION:base"
+wait_for_pane_count "$BASE_WIN" 1 \
+    || { echo "FAIL [tile labels round-trip] base never reduced to 1 pane" >&2; exit 1; }
+
+POST_STATUS=$("${TMUX_CMD[@]}" show-options -wqv -t "$BASE_WIN" pane-border-status)
+POST_FORMAT=$("${TMUX_CMD[@]}" show-options -wqv -t "$BASE_WIN" pane-border-format)
+if [[ -n "$POST_STATUS" || -n "$POST_FORMAT" ]]; then
+    echo "FAIL [tile labels round-trip] window options leaked: status='$POST_STATUS' format='$POST_FORMAT'" >&2
+    exit 1
+fi
+echo "PASS [tile labels round-trip] window-scoped border options cleared"
+
+"${TMUX_CMD[@]}" set-option -gu @explode-scope
