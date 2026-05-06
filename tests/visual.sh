@@ -79,6 +79,18 @@ wait_for_window_gone() {
     return 1
 }
 
+wait_for_pane_count() {
+    local target="$1" expected="$2" deadline=$((SECONDS + 5)) actual
+    while (( SECONDS < deadline )); do
+        actual=$("${TMUX_CMD[@]}" list-panes -t "$target" -F '#{pane_id}' 2>/dev/null \
+                 | wc -l | tr -d ' ')
+        (( actual == expected )) && return 0
+        sleep 0.1
+    done
+    echo "wait_for_pane_count: $target expected=$expected actual=$actual" >&2
+    return 1
+}
+
 snapshot_overview() {
     local win="$1"
     local pane_data
@@ -450,11 +462,15 @@ label_pane "sib1:w1.0" "SIB1"
 wait_for_markers "$HOME_SESSION" 1
 wait_for_markers "sib1" 1
 
+BASE_WIN=$("${TMUX_CMD[@]}" display-message -p -t "$HOME_SESSION:base" '#{window_id}')
+
 "${TMUX_CMD[@]}" set-option -g @explode-scope server
 run_toggle "$HOME_SESSION:base"
-sleep 0.3
+wait_for_pane_count "$BASE_WIN" 2 \
+    || { echo "FAIL [server single-window safety] explode never reached 2 panes" >&2; exit 1; }
 run_toggle "$HOME_SESSION:base"
-sleep 0.3
+wait_for_pane_count "$BASE_WIN" 1 \
+    || { echo "FAIL [server single-window safety] unexplode never reduced to 1 pane" >&2; exit 1; }
 
 if ! "${TMUX_CMD[@]}" has-session -t "$HOME_SESSION" 2>/dev/null; then
     echo "FAIL [server single-window safety] home session destroyed by toggle cycle" >&2

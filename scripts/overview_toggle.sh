@@ -277,7 +277,9 @@ unexplode_server() {
         # Killing the pane terminates its `tmux attach` process, dropping
         # only the nested client we created — other clients attached to
         # that session stay put, and the session itself is untouched.
-        tmux kill-pane -t "$pane_id"
+        # Tolerate already-dead panes (user closed one manually before
+        # toggling off) so the loop still cleans up its siblings.
+        tmux kill-pane -t "$pane_id" 2>/dev/null || true
     done <<< "$panes_data"
 }
 
