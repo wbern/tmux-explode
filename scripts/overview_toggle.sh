@@ -3,9 +3,9 @@
 # (panes restored to their origins).
 #
 # Runtime options (read fresh on each invocation):
-#   @explode-scope        'session' (default) or 'server'
-#   @explode-mode         'active' (default) or 'all'    [session-scope only]
-#   @explode-window-name  default 'overview'
+#   @explode-scope        'all' (default), 'session', or 'server'
+#   @explode-mode         'active' (default) or 'all'    [session/all scope only]
+#   @explode-window-name  default 'overview'             [session scope only]
 
 set -euo pipefail
 
@@ -23,7 +23,7 @@ get_tmux_option() {
 
 OVERVIEW=$(get_tmux_option "@explode-window-name" "overview")
 MODE=$(get_tmux_option "@explode-mode" "active")
-SCOPE=$(get_tmux_option "@explode-scope" "session")
+SCOPE=$(get_tmux_option "@explode-scope" "all")
 
 # tmux propagates the calling pane's context via run-shell, so plain
 # display-message with no -t reads from the keybinding's source pane, not from
@@ -110,7 +110,10 @@ unexplode() {
 # user created (or moved into place) while exploded, we leave the restored
 # window parked rather than evict the squatter.
 restore_window_order() {
-    [[ ${#new_window_for_index[@]} -eq 0 ]] && return 0
+    # `${arr[*]+x}` is the set -u-safe way to ask "any keys?" — bash 5.x
+    # treats `${#arr[@]}` on a declared-but-empty associative array as an
+    # unbound-variable error.
+    [[ -z ${new_window_for_index[*]+x} ]] && return 0
 
     local indices park=9000 i win
     indices=$(printf '%s\n' "${!new_window_for_index[@]}" | sort -n)
@@ -200,13 +203,61 @@ explode() {
 # nothing.
 SOCKET_PATH="${TMUX%%,*}"
 
+add_session_attach_pane() {
+    local name="$1"
+
+    # Snapshot the target session's status setting so we can restore it
+    # on unexplode. show-options without -g returns ONLY session-local
+    # values — if empty, the session is inheriting the global default
+    # and we record an "unset" marker so we know to re-inherit later.
+    local saved status_line
+    saved=""
+    status_line=$(tmux show-options -t "$name" status 2>/dev/null || true)
+    if [[ -n "$status_line" ]]; then
+        saved=${status_line#status }
+        saved="set:$saved"
+    else
+        saved="unset"
+    fi
+    tmux set-option -t "$name" status off
+
+    # printf %q quotes session names (and the socket path) safely for the
+    # shell that tmux spawns under the new pane. The leading `unset TMUX`
+    # is what lets tmux nest — split-window's `-e TMUX` flag is unreliable
+    # across versions (3.6a leaves the var set; some readings of -e treat
+    # it as "set to empty" rather than "unset"), so we do the unset in
+    # the shell where it's portable.
+    local q_name q_sock cmd
+    q_name=$(printf '%q' "$name")
+    q_sock=$(printf '%q' "$SOCKET_PATH")
+    cmd="unset TMUX; exec tmux -S $q_sock attach -t $q_name"
+
+    local new_pane
+    new_pane=$(tmux split-window -t "$CURRENT_WIN" \
+               -P -F '#{pane_id}' "$cmd")
+
+    tmux set-option -p -t "$new_pane" "@orig_session" "$name"
+    tmux set-option -p -t "$new_pane" "@orig_session_status" "$saved"
+
+    # Re-tile between joins so panes don't shrink past tmux's minimum
+    # size and trigger 'create pane failed'.
+    tmux select-layout -t "$CURRENT_WIN" tiled
+}
+
+other_session_names() {
+    local s
+    while IFS= read -r s; do
+        [[ -z "$s" || "$s" == "$SESSION_NAME" ]] && continue
+        printf '%s\n' "$s"
+    done < <(tmux list-sessions -F '#{session_name}')
+}
+
 explode_server() {
     local others=()
     local s
     while IFS= read -r s; do
-        [[ -z "$s" || "$s" == "$SESSION_NAME" ]] && continue
         others+=("$s")
-    done < <(tmux list-sessions -F '#{session_name}')
+    done < <(other_session_names)
 
     if (( ${#others[@]} == 0 )); then
         tmux display-message "tmux_explode: no other sessions to explode"
@@ -215,92 +266,140 @@ explode_server() {
 
     local name
     for name in "${others[@]}"; do
-        # Snapshot the target session's status setting so we can restore it
-        # on unexplode. show-options without -g returns ONLY session-local
-        # values — if empty, the session is inheriting the global default
-        # and we record an "unset" marker so we know to re-inherit later.
-        local saved status_line
-        saved=""
-        status_line=$(tmux show-options -t "$name" status 2>/dev/null || true)
-        if [[ -n "$status_line" ]]; then
-            saved=${status_line#status }
-            saved="set:$saved"
-        else
-            saved="unset"
-        fi
-        tmux set-option -t "$name" status off
-
-        # printf %q quotes session names (and the socket path) safely for the
-        # shell that tmux spawns under the new pane. The leading `unset TMUX`
-        # is what lets tmux nest — split-window's `-e TMUX` flag is unreliable
-        # across versions (3.6a leaves the var set; some readings of -e treat
-        # it as "set to empty" rather than "unset"), so we do the unset in
-        # the shell where it's portable.
-        local q_name q_sock cmd
-        q_name=$(printf '%q' "$name")
-        q_sock=$(printf '%q' "$SOCKET_PATH")
-        cmd="unset TMUX; exec tmux -S $q_sock attach -t $q_name"
-
-        local new_pane
-        new_pane=$(tmux split-window -t "$CURRENT_WIN" \
-                   -P -F '#{pane_id}' "$cmd")
-
-        tmux set-option -p -t "$new_pane" "@orig_session" "$name"
-        tmux set-option -p -t "$new_pane" "@orig_session_status" "$saved"
-
-        # Re-tile between joins so panes don't shrink past tmux's minimum
-        # size and trigger 'create pane failed'.
-        tmux select-layout -t "$CURRENT_WIN" tiled
+        add_session_attach_pane "$name"
     done
 
     tmux select-layout -t "$CURRENT_WIN" tiled
 }
 
-unexplode_server() {
-    local panes_data
-    panes_data=$(tmux list-panes -t "$CURRENT_WIN" \
-                 -F '#{pane_id}'$'\t''#{@orig_session}'$'\t''#{@orig_session_status}')
+# ---------------------------------------------------------------------------
+# Hybrid scope: pull in every pane on the server — current session's other
+# windows get gathered like session scope, sibling sessions become nested
+# attaches like server scope, all alongside the original pane in the calling
+# window. One toggle, one wall, no overview tab.
+# ---------------------------------------------------------------------------
 
-    local pane_id orig_session saved
-    while IFS=$'\t' read -r pane_id orig_session saved; do
-        [[ -z "${orig_session:-}" ]] && continue
+explode_all() {
+    local added=0
 
-        # Restore the target session's status setting. `unset` means the
-        # session was inheriting the global default — use -u to drop the
-        # session-local override rather than pinning a value.
-        if [[ "${saved:-}" == "unset" ]]; then
-            tmux set-option -u -t "$orig_session" status 2>/dev/null || true
-        elif [[ "${saved:-}" == set:* ]]; then
-            tmux set-option -t "$orig_session" status "${saved#set:}" 2>/dev/null || true
+    while IFS=$'\t' read -r win_id win_index win_name; do
+        [[ "$win_id" == "$CURRENT_WIN" ]] && continue
+
+        local pane_ids
+        if [[ "$MODE" == "all" ]]; then
+            pane_ids=$(tmux list-panes -t "$win_id" -F '#{pane_id}')
+        else
+            pane_ids=$(tmux list-panes -t "$win_id" -F '#{pane_id} #{?pane_active,1,0}' \
+                       | awk '$2==1 {print $1}')
         fi
 
-        # Killing the pane terminates its `tmux attach` process, dropping
-        # only the nested client we created — other clients attached to
-        # that session stay put, and the session itself is untouched.
-        # Tolerate already-dead panes (user closed one manually before
-        # toggling off) so the loop still cleans up its siblings.
-        tmux kill-pane -t "$pane_id" 2>/dev/null || true
-    done <<< "$panes_data"
+        while IFS= read -r pane_id; do
+            [[ -z "$pane_id" ]] && continue
+            tmux set-option -p -t "$pane_id" "@orig_window" "$win_name"
+            tmux set-option -p -t "$pane_id" "@orig_window_id" "$win_id"
+            tmux set-option -p -t "$pane_id" "@orig_window_index" "$win_index"
+            tmux join-pane -s "$pane_id" -t "$CURRENT_WIN"
+            tmux select-layout -t "$CURRENT_WIN" tiled
+            added=1
+        done <<< "$pane_ids"
+    done < <(tmux list-windows -t "$SESSION" -F '#{window_id}'$'\t''#{window_index}'$'\t''#{window_name}')
+
+    local s
+    while IFS= read -r s; do
+        add_session_attach_pane "$s"
+        added=1
+    done < <(other_session_names)
+
+    if (( added == 0 )); then
+        tmux display-message "tmux_explode: nothing else on the server to explode"
+        return 0
+    fi
+
+    tmux select-layout -t "$CURRENT_WIN" tiled
 }
 
-# A server-scope explosion is in progress when any pane in the current
-# window carries @orig_session — that marker is set only by explode_server
-# and survives across @explode-scope flips, so unexplode works even if the
-# user changed scope mid-flow.
-server_explode_active() {
+unexplode_inplace() {
+    local live_windows
+    live_windows=$(tmux list-windows -t "$SESSION" -F '#{window_id}')
+
+    declare -A first_pane_of_window
+
+    # Unit separator (\x1f) instead of tab — tab is whitespace, and read with
+    # IFS=tab collapses consecutive tabs, so a pane with empty leading fields
+    # (e.g. server pane with @orig_session set but no @orig_window) gets its
+    # later fields shifted into the wrong variables.
+    local SEP=$'\x1f'
+    local panes_data
+    panes_data=$(tmux list-panes -t "$CURRENT_WIN" \
+                 -F "#{pane_id}${SEP}#{@orig_session}${SEP}#{@orig_session_status}${SEP}#{@orig_window}${SEP}#{@orig_window_id}${SEP}#{@orig_window_index}")
+
+    local pane_id orig_session saved orig_name orig_id orig_index
+    while IFS="$SEP" read -r pane_id orig_session saved orig_name orig_id orig_index; do
+        if [[ -n "${orig_session:-}" ]]; then
+            # Restore the target session's status setting. `unset` means the
+            # session was inheriting the global default — use -u to drop the
+            # session-local override rather than pinning a value.
+            if [[ "${saved:-}" == "unset" ]]; then
+                tmux set-option -u -t "$orig_session" status 2>/dev/null || true
+            elif [[ "${saved:-}" == set:* ]]; then
+                tmux set-option -t "$orig_session" status "${saved#set:}" 2>/dev/null || true
+            fi
+
+            # Killing the pane terminates its `tmux attach` process, dropping
+            # only the nested client we created — other clients attached to
+            # that session stay put, and the session itself is untouched.
+            # Tolerate already-dead panes (user closed one manually before
+            # toggling off) so the loop still cleans up its siblings.
+            tmux kill-pane -t "$pane_id" 2>/dev/null || true
+            continue
+        fi
+
+        # No @orig_window means this is the user's original pane (or a
+        # sibling they had open before exploding) — leave it in place.
+        [[ -z "${orig_name:-}" ]] && continue
+
+        if [[ -n "${orig_id:-}" ]] && grep -Fxq "$orig_id" <<< "$live_windows"; then
+            tmux join-pane -s "$pane_id" -t "$orig_id"
+            continue
+        fi
+
+        local group_key="${orig_id:-name:$orig_name}"
+
+        if [[ -z "${first_pane_of_window[$group_key]:-}" ]]; then
+            tmux break-pane -d -s "$pane_id" -n "$orig_name"
+            first_pane_of_window[$group_key]="$pane_id"
+            if [[ -n "${orig_index:-}" ]]; then
+                local new_win_id
+                new_win_id=$(tmux display-message -p -t "$pane_id" '#{window_id}')
+                new_window_for_index[$orig_index]="$new_win_id"
+            fi
+        else
+            tmux join-pane -s "$pane_id" -t "${first_pane_of_window[$group_key]}"
+        fi
+    done <<< "$panes_data"
+
+    restore_window_order
+}
+
+# An in-place explosion (server or hybrid scope) is in progress when any pane
+# in the current window carries @orig_session or @orig_window — those markers
+# survive a mid-flow @explode-scope flip, so unexplode works regardless.
+inplace_explode_active() {
     local marker
-    marker=$(tmux list-panes -t "$CURRENT_WIN" -F '#{@orig_session}' 2>/dev/null \
+    marker=$(tmux list-panes -t "$CURRENT_WIN" \
+             -F '#{@orig_session}#{@orig_window}' 2>/dev/null \
              | grep -v '^$' | head -1 || true)
     [[ -n "$marker" ]]
 }
 
-if server_explode_active; then
-    unexplode_server
-elif [[ "$CURRENT" == "$OVERVIEW" ]]; then
+if [[ "$CURRENT" == "$OVERVIEW" ]]; then
     unexplode
+elif inplace_explode_active; then
+    unexplode_inplace
 else
     case "$SCOPE" in
         server) explode_server ;;
+        all)    explode_all ;;
         *)      explode ;;
     esac
 fi

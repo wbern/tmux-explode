@@ -204,6 +204,7 @@ cleanup
 SESSION_ALL="all_mode"
 build_topology "$SESSION_ALL"
 wait_for_markers "$SESSION_ALL" 6
+"${TMUX_CMD[@]}" set-option -g @explode-scope session
 "${TMUX_CMD[@]}" set-option -g @explode-mode all
 run_toggle
 OVERVIEW=$(wait_for_window "$SESSION_ALL" overview) \
@@ -218,6 +219,7 @@ cleanup
 SESSION_ACTIVE="active_mode"
 build_topology "$SESSION_ACTIVE"
 wait_for_markers "$SESSION_ACTIVE" 6
+"${TMUX_CMD[@]}" set-option -g @explode-scope session
 "${TMUX_CMD[@]}" set-option -g @explode-mode active
 run_toggle
 OVERVIEW=$(wait_for_window "$SESSION_ACTIVE" overview) \
@@ -235,6 +237,7 @@ wait_for_markers "$SESSION_RT" 6
 BASELINE=$("${TMUX_CMD[@]}" list-windows -t "$SESSION_RT" \
            -F '#{window_index} #{window_name} #{window_panes}' | sort)
 
+"${TMUX_CMD[@]}" set-option -g @explode-scope session
 "${TMUX_CMD[@]}" set-option -g @explode-mode all
 run_toggle
 wait_for_window "$SESSION_RT" overview > /dev/null \
@@ -477,5 +480,100 @@ if ! "${TMUX_CMD[@]}" has-session -t "$HOME_SESSION" 2>/dev/null; then
     exit 1
 fi
 echo "PASS [server single-window safety] home session intact after toggle cycle"
+
+"${TMUX_CMD[@]}" set-option -gu @explode-scope
+
+# ---------------------------------------------------------------------------
+# Scenario 8: hybrid scope — gather current session's other windows AND
+# nested attaches to other sessions into the calling window in place.
+# ---------------------------------------------------------------------------
+cleanup
+"${TMUX_CMD[@]}" new-session -d -s "$HOME_SESSION" -n base -x 120 -y 40
+label_pane "$HOME_SESSION:base.0" "HOME"
+"${TMUX_CMD[@]}" new-window -t "$HOME_SESSION:" -n extra
+label_pane "$HOME_SESSION:extra.0" "EXTRA"
+# Re-focus base so home's current window is the one that fires the toggle —
+# the script reads the firing session's current window, not the run-shell -t
+# target.
+"${TMUX_CMD[@]}" select-window -t "$HOME_SESSION:base"
+"${TMUX_CMD[@]}" new-session -d -s "sib1" -n w1 -x 120 -y 40
+label_pane "sib1:w1.0" "SIB1"
+"${TMUX_CMD[@]}" new-session -d -s "sib2" -n w2 -x 120 -y 40
+label_pane "sib2:w2.0" "SIB2"
+
+wait_for_markers "$HOME_SESSION" 2
+wait_for_markers "sib1" 1
+wait_for_markers "sib2" 1
+
+BASE_WIN=$("${TMUX_CMD[@]}" display-message -p -t "$HOME_SESSION:base" '#{window_id}')
+EXTRA_INDEX=$("${TMUX_CMD[@]}" display-message -p -t "$HOME_SESSION:extra" '#{window_index}')
+
+"${TMUX_CMD[@]}" set-option -g @explode-scope all
+run_toggle "$HOME_SESSION:base"
+
+wait_for_pane_count "$BASE_WIN" 4 \
+    || { echo "FAIL [hybrid] explode never reached 4 panes in base window" >&2; exit 1; }
+
+# Window count should drop from 2 to 1 — extra had a single pane, so gathering
+# it consumes the window. base is the only survivor.
+WINDOW_COUNT=$("${TMUX_CMD[@]}" list-windows -t "$HOME_SESSION" -F '#{window_id}' | wc -l | tr -d ' ')
+if (( WINDOW_COUNT != 1 )); then
+    echo "FAIL [hybrid] expected 1 window after explode, got $WINDOW_COUNT" >&2
+    exit 1
+fi
+
+ORIG_WINDOWS=$("${TMUX_CMD[@]}" list-panes -t "$BASE_WIN" -F '#{@orig_window}' \
+               | grep -v '^$' | sort)
+if [[ "$ORIG_WINDOWS" != "extra" ]]; then
+    echo "FAIL [hybrid] expected one local pane tagged @orig_window=extra, got: $ORIG_WINDOWS" >&2
+    exit 1
+fi
+
+ORIG_SESSIONS=$("${TMUX_CMD[@]}" list-panes -t "$BASE_WIN" -F '#{@orig_session}' \
+                | grep -v '^$' | sort)
+EXPECTED_SESSIONS=$(printf 'sib1\nsib2\n')
+if [[ "$ORIG_SESSIONS" != "$EXPECTED_SESSIONS" ]]; then
+    echo "FAIL [hybrid] expected sib1+sib2 as @orig_session panes, got:" >&2
+    echo "$ORIG_SESSIONS" >&2
+    exit 1
+fi
+echo "PASS [hybrid explode] base window has 4 panes (1 original + 1 local + 2 attaches)"
+
+# Round-trip: unexplode should kill nested attaches, rejoin/break-pane local
+# panes back to their origin window, and leave base with one pane.
+run_toggle "$HOME_SESSION:base"
+
+wait_for_pane_count "$BASE_WIN" 1 \
+    || { echo "FAIL [hybrid round-trip] base never reduced to 1 pane" >&2; exit 1; }
+
+if ! "${TMUX_CMD[@]}" list-windows -t "$HOME_SESSION" -F '#{window_name}' | grep -Fxq extra; then
+    echo "FAIL [hybrid round-trip] extra window not restored" >&2
+    "${TMUX_CMD[@]}" list-windows -t "$HOME_SESSION" >&2
+    exit 1
+fi
+
+EXTRA_INDEX_AFTER=$("${TMUX_CMD[@]}" display-message -p -t "$HOME_SESSION:extra" '#{window_index}')
+if [[ "$EXTRA_INDEX_AFTER" != "$EXTRA_INDEX" ]]; then
+    echo "FAIL [hybrid round-trip] extra window index drift: was $EXTRA_INDEX, now $EXTRA_INDEX_AFTER" >&2
+    exit 1
+fi
+
+REMAINING=$("${TMUX_CMD[@]}" list-sessions -F '#{session_name}' | sort)
+EXPECTED_REMAINING=$(printf 'home\nsib1\nsib2\n')
+if [[ "$REMAINING" != "$EXPECTED_REMAINING" ]]; then
+    echo "FAIL [hybrid round-trip] sibling sessions changed:" >&2
+    echo "--- expected" >&2; echo "$EXPECTED_REMAINING" >&2
+    echo "--- actual"   >&2; echo "$REMAINING" >&2
+    exit 1
+fi
+
+NESTED_CLIENTS=$("${TMUX_CMD[@]}" list-clients -F '#{client_session}' \
+                 | grep -E '^sib[12]$' || true)
+if [[ -n "$NESTED_CLIENTS" ]]; then
+    echo "FAIL [hybrid round-trip] orphan nested clients remain:" >&2
+    echo "$NESTED_CLIENTS" >&2
+    exit 1
+fi
+echo "PASS [hybrid round-trip] base restored, extra window back at index $EXTRA_INDEX, sessions intact"
 
 "${TMUX_CMD[@]}" set-option -gu @explode-scope
