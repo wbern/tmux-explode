@@ -12,9 +12,9 @@ focused work.
 
 ![demo](docs/demo.gif)
 
-(Server-scope wall: five sibling sessions tiled into one overview, recorded
-in a Linux container. Reproduce with `docker build -f tests/Dockerfile.record
--t tmux-explode-record . && docker run --rm -it tmux-explode-record`.)
+(Eight sibling sessions humming away, then `prefix + O` snaps them all into
+one overview. Reproduce with `./tests/record_demo.sh` (needs `asciinema`
+and `agg` on PATH; `brew install asciinema agg`).)
 
 ## Install
 
