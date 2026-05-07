@@ -1,3 +1,9 @@
+## [1.0.2](https://github.com/wbern/tmux-explode/compare/v1.0.1...v1.0.2) (2026-05-07)
+
+### Bug Fixes
+
+* **scripts:** use printable separator that tmux 3.4 doesn't escape ([827eb40](https://github.com/wbern/tmux-explode/commit/827eb40f060e625a78aba153349cc6114ef6f0dd))
+
 ## [1.0.1](https://github.com/wbern/tmux-explode/compare/v1.0.0...v1.0.1) (2026-05-07)
 
 ### Bug Fixes
