@@ -1,3 +1,9 @@
+## [1.0.4](https://github.com/wbern/tmux-explode/compare/v1.0.3...v1.0.4) (2026-05-07)
+
+### Bug Fixes
+
+* **scripts:** allowlist @explode-style-anchor/local/remote values ([de66b73](https://github.com/wbern/tmux-explode/commit/de66b736dd95fe46f098fbfd16d5d21d18d0412b))
+
 ## [1.0.3](https://github.com/wbern/tmux-explode/compare/v1.0.2...v1.0.3) (2026-05-07)
 
 ### Bug Fixes
