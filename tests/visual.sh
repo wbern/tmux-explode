@@ -225,6 +225,8 @@ OVERVIEW=$(wait_for_window "$SESSION_ALL" overview) \
 SNAP=$(snapshot_overview "$OVERVIEW")
 assert_snapshot "all" "$SNAP" "$FIXTURES/explode_6_panes.txt"
 
+echo ">>> entering Scenario 2 <<<"
+set -x
 # ---------------------------------------------------------------------------
 # Scenario 2: 'active' mode
 # ---------------------------------------------------------------------------
