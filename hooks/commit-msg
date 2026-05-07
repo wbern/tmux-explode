@@ -1,5 +1,10 @@
 #!/bin/sh
-# Reject AI-attribution trailers in commit messages.
+# Local commit-msg policy:
+#   1. Reject AI-attribution trailers (Claude / Anthropic / GPT / Copilot,
+#      "Generated with Claude" lines, robot emoji).
+#   2. Enforce Conventional Commits on the subject line so semantic-release
+#      can compute the next version. Allow merge / revert / fixup commits
+#      and the auto-generated release commit semantic-release pushes back.
 #
 # Enable for this clone:
 #   git config core.hooksPath hooks
@@ -13,5 +18,23 @@ if grep -qiE '^[[:space:]]*Co-Authored-By:.*(Claude|Anthropic|GPT|Copilot)' "$ms
    || grep -qiE '^[[:space:]]*🤖' "$msg_file"; then
     echo "commit-msg: refusing AI-attribution trailer." >&2
     echo "Strip Co-Authored-By / 'Generated with Claude' / 🤖 lines and retry." >&2
+    exit 1
+fi
+
+subject=$(sed -n '1p' "$msg_file")
+
+case "$subject" in
+    "Merge "*|"Revert "*|"fixup! "*|"squash! "*|"chore(release): "*)
+        exit 0
+        ;;
+esac
+
+# type(optional-scope)!: subject — types match commit-analyzer defaults.
+if ! echo "$subject" | grep -qE '^(feat|fix|docs|style|refactor|perf|test|chore|build|ci|revert)(\([a-z0-9_.-]+\))?!?: .+'; then
+    echo "commit-msg: subject must use Conventional Commits." >&2
+    echo "  Got:    $subject" >&2
+    echo "  Format: <type>(<optional-scope>)!: <subject>" >&2
+    echo "  Types:  feat fix docs style refactor perf test chore build ci revert" >&2
+    echo "  Notes:  'feat:' bumps minor, 'fix:' bumps patch, '!' or 'BREAKING CHANGE' footer bumps major." >&2
     exit 1
 fi
