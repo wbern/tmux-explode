@@ -357,15 +357,15 @@ start_heatmap_poller() {
 # bursts up to ~1s, then SIGKILLs as a backstop so a wedged process
 # can't deadlock teardown.
 kill_and_wait() {
-    local pid="$1" n
+    local pid="$1" _
     [[ -z "$pid" ]] && return 0
     kill "$pid" 2>/dev/null || true
-    for n in 1 2 3 4 5 6 7 8 9 10; do
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
         kill -0 "$pid" 2>/dev/null || return 0
         sleep 0.1
     done
     kill -9 "$pid" 2>/dev/null || true
-    for n in 1 2 3 4 5; do
+    for _ in 1 2 3 4 5; do
         kill -0 "$pid" 2>/dev/null || return 0
         sleep 0.1
     done

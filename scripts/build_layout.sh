@@ -162,6 +162,7 @@ self_test() {
     # Bake the socket name into the trap string at set-time. Referring to
     # ${T[@]} or $sock from the trap would explode under `set -u` when the
     # trap fires after self_test has returned and its locals are unset.
+    # shellcheck disable=SC2064
     trap "tmux -f /dev/null -L $sock kill-server 2>/dev/null || true" EXIT
 
     local fail=0

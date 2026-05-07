@@ -16,12 +16,12 @@ unset TMUX TMUX_PANE
 banner() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 
 label_pane() {
-    local target="$1" label="$2" quoted marker i
+    local target="$1" label="$2" quoted marker
     quoted=$(printf '%q' "$label")
     marker=">>> $label <<<"
     "${TMUX_CMD[@]}" send-keys -t "$target" \
         "clear; printf '\\n  >>> %s <<<\\n' $quoted; cat" Enter
-    for i in $(seq 1 50); do
+    for _ in $(seq 1 50); do
         "${TMUX_CMD[@]}" capture-pane -p -t "$target" 2>/dev/null \
             | grep -qF "$marker" && return 0
         sleep 0.1
@@ -46,7 +46,7 @@ banner "Firing tmux_explode toggle (scope=server)…"
 "${TMUX_CMD[@]}" run-shell -t home:base "$REPO_ROOT/scripts/overview_toggle.sh"
 
 # Wait for overview window to materialise.
-for i in $(seq 1 50); do
+for _ in $(seq 1 50); do
     count=$("${TMUX_CMD[@]}" list-panes -t home:overview 2>/dev/null | wc -l | tr -d ' ' || echo 0)
     [[ "$count" -ge 5 ]] && break
     sleep 0.1

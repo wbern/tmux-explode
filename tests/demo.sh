@@ -45,14 +45,14 @@ esac
 unset TMUX TMUX_PANE
 
 label_pane() {
-    local target="$1" label="$2" quoted marker i
+    local target="$1" label="$2" quoted marker
     quoted=$(printf '%q' "$label")
     marker=">>> $label <<<"
     "${TMUX_CMD[@]}" send-keys -t "$target" \
         "clear; printf '\\n  >>> %s <<<\\n' $quoted; cat" Enter
     # Poll until the label is actually rendered, so downstream captures
     # see the printed marker rather than the still-buffered command line.
-    for i in $(seq 1 50); do
+    for _ in $(seq 1 50); do
         if "${TMUX_CMD[@]}" capture-pane -p -t "$target" 2>/dev/null \
                 | grep -qF "$marker"; then
             return 0
@@ -98,8 +98,8 @@ build_server_topology() {
 
 wait_for_panes() {
     # Poll until $target has at least $min_panes panes.
-    local target_window="$1" min_panes="$2" i count
-    for i in $(seq 1 50); do
+    local target_window="$1" min_panes="$2" count
+    for _ in $(seq 1 50); do
         count=$("${TMUX_CMD[@]}" list-panes -t "$target_window" 2>/dev/null \
                 | wc -l | tr -d ' ')
         if [[ "$count" -ge "$min_panes" ]]; then
