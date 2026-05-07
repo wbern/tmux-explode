@@ -1,6 +1,10 @@
 .DS_Store
 *.swp
 
+# semantic-release toolchain is installed in CI from the committed
+# package-lock.json; node_modules/ never belongs in the repo.
+node_modules/
+
 # Gas Town agent metadata — runtime state for the harness that authored
 # this branch; never belongs in the public repo.
 .beads/

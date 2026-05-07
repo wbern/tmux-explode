@@ -25,13 +25,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: lts/*
+          cache: npm
+      - name: Install pinned semantic-release toolchain
+        # `npm ci` installs exactly what's in package-lock.json — no minor-
+        # version drift between runs, no surprise transitive updates.
+        run: npm ci
       - name: Run semantic-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          npx -y \
-            -p semantic-release@24 \
-            -p @semantic-release/changelog@6 \
-            -p @semantic-release/git@10 \
-            -p conventional-changelog-conventionalcommits@8 \
-            semantic-release
+        run: npx semantic-release

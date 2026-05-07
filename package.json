@@ -1,0 +1,13 @@
+{
+  "name": "tmux-explode-release",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Pinned semantic-release toolchain for the release workflow. Not published; not consumed by users of the plugin.",
+  "license": "MIT",
+  "devDependencies": {
+    "@semantic-release/changelog": "6.0.3",
+    "@semantic-release/git": "10.0.1",
+    "conventional-changelog-conventionalcommits": "8.0.0",
+    "semantic-release": "24.2.9"
+  }
+}
