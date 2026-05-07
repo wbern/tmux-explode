@@ -259,14 +259,33 @@ SOCKET_PATH="${TMUX%%,*}"
 # the LABEL on top of each border via inline `#[fg=...]` markup in
 # pane-border-format, which IS evaluated per-pane against that pane's user
 # options (@orig_session/@orig_window).
-WALL_STYLE_ANCHOR=$(get_tmux_option "@explode-style-anchor" "fg=yellow,bold")
-WALL_STYLE_LOCAL=$(get_tmux_option "@explode-style-local"  "fg=cyan")
-WALL_STYLE_REMOTE=$(get_tmux_option "@explode-style-remote" "fg=magenta")
+# These three values land inside `#[...]` markup in pane-border-format.
+# tmux evaluates `#(cmd)` in format strings as a shell command on every
+# redraw, so a value containing `]` (closes the style block) followed by
+# `#(...)` would be RCE on the next toggle. Restrict to the alphabet that
+# valid tmux style strings actually use; reject everything else and fall
+# back to the default with a warning.
+sanitize_label_style() {
+    local opt="$1" value="$2" default="$3"
+    if [[ "$value" =~ ^[a-zA-Z0-9=,.\ _-]+$ ]]; then
+        printf '%s' "$value"
+    else
+        tmux display-message "tmux_explode: ignoring unsafe $opt; using default"
+        printf '%s' "$default"
+    fi
+}
+
+WALL_STYLE_ANCHOR=$(sanitize_label_style "@explode-style-anchor" \
+    "$(get_tmux_option "@explode-style-anchor" "fg=yellow,bold")" "fg=yellow,bold")
+WALL_STYLE_LOCAL=$(sanitize_label_style "@explode-style-local" \
+    "$(get_tmux_option "@explode-style-local"  "fg=cyan")" "fg=cyan")
+WALL_STYLE_REMOTE=$(sanitize_label_style "@explode-style-remote" \
+    "$(get_tmux_option "@explode-style-remote" "fg=magenta")" "fg=magenta")
 
 # Inside a tmux format `#{?...,then,else}` the comma is the case separator,
 # so a literal comma (e.g. `fg=yellow,bold`) inside `#[...]` markup has to
-# be escaped as `#,`. Escape the user-supplied style strings before
-# substituting them in.
+# be escaped as `#,`. Escape the validated style strings before substituting
+# them in.
 WALL_FMT_ANCHOR=${WALL_STYLE_ANCHOR//,/#,}
 WALL_FMT_LOCAL=${WALL_STYLE_LOCAL//,/#,}
 WALL_FMT_REMOTE=${WALL_STYLE_REMOTE//,/#,}
