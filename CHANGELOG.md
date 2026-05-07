@@ -1,3 +1,9 @@
+## [1.0.1](https://github.com/wbern/tmux-explode/compare/v1.0.0...v1.0.1) (2026-05-07)
+
+### Bug Fixes
+
+* **tests:** wait for socket release before next scenario ([90a1a51](https://github.com/wbern/tmux-explode/commit/90a1a5119f6563e893f3b7ddc3079e08d6a2507f))
+
 # Changelog
 
 All notable changes to this project will be documented in this file.
