@@ -510,7 +510,7 @@ teardown_stranded_overview() {
         tmux select-window -t "$fallback_wid" 2>/dev/null || true
     fi
 
-    local SEP=$'\x1f'
+    local SEP='|'
     local pane_id orig_session orig_name orig_id
     while IFS="$SEP" read -r pane_id orig_session orig_name orig_id; do
         [[ -z "$pane_id" ]] && continue
@@ -592,7 +592,7 @@ teardown_inplace_wall() {
     local now_ts
     now_ts=$(date +%s)
 
-    local SEP=$'\x1f'
+    local SEP='|'
     local pane_id orig_session saved orig_name orig_id orig_index last_change saved_ws
     while IFS="$SEP" read -r pane_id orig_session saved orig_name orig_id orig_index last_change saved_ws; do
         [[ -z "$pane_id" ]] && continue
@@ -991,11 +991,20 @@ unexplode_inplace() {
 
     declare -A first_pane_of_window
 
-    # Unit separator (\x1f) instead of tab — tab is whitespace, and read with
-    # IFS=tab collapses consecutive tabs, so a pane with empty leading fields
-    # (e.g. server pane with @orig_session set but no @orig_window) gets its
-    # later fields shifted into the wrong variables.
-    local SEP=$'\x1f'
+    # Pipe instead of tab. tab is whitespace, and `read` with IFS=tab
+    # collapses consecutive tabs — a pane with empty leading fields (e.g.
+    # a server pane with @orig_session set but no @orig_window) shifts its
+    # later fields into the wrong variables.
+    #
+    # We previously used $'\x1f' (unit separator) for the same reason. tmux
+    # 3.6 emits the byte verbatim in -F output, but tmux 3.4 (Ubuntu noble,
+    # CI default) escapes non-printable bytes as the literal string `\NNN`,
+    # so `IFS=$'\x1f' read` no longer splits — every field collapses into
+    # pane_id and the loop's kill-pane / join-pane never fires. Pipe is
+    # safe across versions and across all values we put in these fields:
+    # pane/window ids, integers, session names, and "set:VALUE" / "unset"
+    # for status and window-size (none of which contain `|`).
+    local SEP='|'
     local panes_data
     panes_data=$(tmux list-panes -t "$CURRENT_WIN" \
                  -F "#{pane_id}${SEP}#{@orig_session}${SEP}#{@orig_session_status}${SEP}#{@orig_window}${SEP}#{@orig_window_id}${SEP}#{@orig_window_index}${SEP}#{@pane_last_change}${SEP}#{@orig_session_window_size}")
