@@ -9,9 +9,6 @@
 # Run from anywhere: ./tests/visual.sh
 
 set -euo pipefail
-# Log the failing line+command on any unexpected exit. Removed once we
-# have a green CI run again.
-trap 'rc=$?; echo "ERR trap: line=$LINENO rc=$rc cmd=${BASH_COMMAND}" >&2' ERR
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}" )" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -29,6 +26,21 @@ TMUX_CMD=(tmux -f /dev/null -L "$SOCKET")
 
 cleanup() {
     "${TMUX_CMD[@]}" kill-server 2>/dev/null || true
+    # `kill-server` returns once the server acknowledges the signal, but
+    # the socket file may linger another tick or two while the process
+    # tears down. On Linux tmux 3.4 (Ubuntu noble) a `new-session` issued
+    # immediately after `kill-server` races: it connects to the dying
+    # socket, the server vanishes mid-handshake, and tmux prints
+    # "server exited unexpectedly" + exits non-zero. Poll until the
+    # socket is truly gone before returning so the next scenario starts
+    # from a clean slate.
+    local sock_path
+    sock_path="${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/$SOCKET"
+    local _
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        [[ -S "$sock_path" ]] || return 0
+        sleep 0.05
+    done
 }
 trap cleanup EXIT
 
@@ -55,17 +67,7 @@ wait_for_markers() {
         (( found >= expected )) && return 0
         sleep 0.1
     done
-    echo "FAIL: markers never rendered (saw $found/$expected) in session=$session" >&2
-    echo "--- panes in session ---" >&2
-    "${TMUX_CMD[@]}" list-panes -s -t "$session" \
-        -F '#{pane_id} #{pane_pid} #{pane_current_command} #{pane_width}x#{pane_height}' >&2 || true
-    echo "--- pane contents ---" >&2
-    "${TMUX_CMD[@]}" list-panes -s -t "$session" -F '#{pane_id}' | while read -r p; do
-        echo "[ $p ]" >&2
-        "${TMUX_CMD[@]}" capture-pane -p -t "$p" >&2 || true
-    done
-    echo "--- env (smoke) ---" >&2
-    echo "TERM=${TERM-<unset>} SHELL=${SHELL-<unset>} TMUX=${TMUX-<unset>}" >&2
+    echo "FAIL: markers never rendered (saw $found/$expected)" >&2
     return 1
 }
 
@@ -225,8 +227,6 @@ OVERVIEW=$(wait_for_window "$SESSION_ALL" overview) \
 SNAP=$(snapshot_overview "$OVERVIEW")
 assert_snapshot "all" "$SNAP" "$FIXTURES/explode_6_panes.txt"
 
-echo ">>> entering Scenario 2 <<<"
-set -x
 # ---------------------------------------------------------------------------
 # Scenario 2: 'active' mode
 # ---------------------------------------------------------------------------
