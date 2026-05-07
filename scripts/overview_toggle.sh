@@ -9,6 +9,12 @@
 
 set -euo pipefail
 
+# Layout builder lives in a sibling script so it can be unit-tested in
+# isolation (build_layout.sh --self-test). We source it for its functions only;
+# its CLI dispatch is guarded by a BASH_SOURCE check.
+# shellcheck source=build_layout.sh
+. "$(dirname "${BASH_SOURCE[0]}")/build_layout.sh"
+
 get_tmux_option() {
     local option="$1"
     local default_value="$2"
@@ -24,6 +30,38 @@ get_tmux_option() {
 OVERVIEW=$(get_tmux_option "@explode-window-name" "overview")
 MODE=$(get_tmux_option "@explode-mode" "active")
 SCOPE=$(get_tmux_option "@explode-scope" "all")
+
+# Column-bias knobs read by build_layout via the environment. Empty values
+# leave build_layout's own defaults in effect (40 cells, aspect 0.5). The
+# user-facing aspect option takes a decimal like `0.5`; bash arithmetic
+# can't multiply floats so we convert to tenths via awk and pass that to
+# build_layout as EXPLODE_TARGET_ASPECT_X10.
+#
+# Both values are validated against strict numeric regexes before being
+# exported. Bash arithmetic context (used downstream in build_layout) does
+# recursive variable resolution — an unvalidated value like
+# `a[$(rm -rf /tmp/x)]` would trigger command substitution at every
+# `(( min_w < 1 ))` site. The validation here is the first line of defense;
+# build_layout adds a second.
+_min_w=$(get_tmux_option "@explode-min-pane-width" "")
+_aspect=$(get_tmux_option "@explode-target-aspect" "")
+if [[ -n "$_min_w" ]]; then
+    if [[ "$_min_w" =~ ^[0-9]+$ ]]; then
+        export EXPLODE_MIN_PANE_WIDTH="$_min_w"
+    else
+        tmux display-message "tmux_explode: ignoring malformed @explode-min-pane-width"
+    fi
+fi
+if [[ -n "$_aspect" ]]; then
+    if [[ "$_aspect" =~ ^[0-9]*\.?[0-9]+$ ]]; then
+        _x10=$(awk -v v="$_aspect" 'BEGIN { printf "%d", v*10 + 0.5 }')
+        export EXPLODE_TARGET_ASPECT_X10="$_x10"
+        unset _x10
+    else
+        tmux display-message "tmux_explode: ignoring malformed @explode-target-aspect"
+    fi
+fi
+unset _min_w _aspect
 
 # tmux propagates the calling pane's context via run-shell, so plain
 # display-message with no -t reads from the keybinding's source pane, not from
@@ -185,7 +223,7 @@ explode() {
         done <<< "$pane_ids"
     done < <(tmux list-windows -t "$SESSION" -F '#{window_id}'$'\t''#{window_index}'$'\t''#{window_name}')
 
-    tmux select-layout -t "$SESSION:$OVERVIEW" tiled
+    apply_column_biased_layout "$SESSION:$OVERVIEW"
 }
 
 # ---------------------------------------------------------------------------
@@ -267,6 +305,62 @@ teardown_wall_borders() {
     tmux set-option -w -u -t "$CURRENT_WIN" "@explode_saved_border_format" 2>/dev/null || true
 }
 
+# Bias a window's layout toward more columns of taller panes than tmux's
+# built-in `tiled` produces. Reads window dimensions, lists panes in DFS-ish
+# order, asks build_layout for a column-biased string, applies it, and
+# verifies the resulting #{window_layout} matches what we sent (defends
+# against tmux's silent no-op on pane-count mismatch and other off-by-ones).
+# Falls back to `tiled` on any failure so the toggle never dead-ends with a
+# stack of zero-cell panes.
+apply_column_biased_layout() {
+    local target="$1"
+
+    # Opt-out: users who prefer tmux's built-in tiled (squarish) layout.
+    local style
+    style=$(get_tmux_option "@explode-layout" "columns")
+    if [[ "$style" == "tiled" ]]; then
+        tmux select-layout -t "$target" tiled
+        return 0
+    fi
+
+    local fallback_reason=""
+    local sx sy pane_ids
+    sx=$(tmux display-message -p -t "$target" '#{window_width}' 2>/dev/null || true)
+    sy=$(tmux display-message -p -t "$target" '#{window_height}' 2>/dev/null || true)
+    pane_ids=$(tmux list-panes -t "$target" -F '#{pane_id}' 2>/dev/null || true)
+
+    if [[ -z "$sx" || -z "$sy" ]]; then
+        fallback_reason="no window dims"
+    elif [[ -z "$pane_ids" ]]; then
+        fallback_reason="no panes"
+    fi
+
+    local layout="" got=""
+    if [[ -z "$fallback_reason" ]]; then
+        local -a pids=()
+        while IFS= read -r p; do pids+=("$p"); done <<< "$pane_ids"
+        if ! layout=$(build_layout "$sx" "$sy" "${pids[@]}" 2>/dev/null); then
+            fallback_reason="build_layout failed"
+        elif ! tmux select-layout -t "$target" "$layout" 2>/dev/null; then
+            fallback_reason="tmux rejected layout"
+        else
+            # tmux silently truncates layouts when the pane count doesn't
+            # match the leaf count — verify via checksum read-back.
+            got=$(tmux display-message -p -t "$target" '#{window_layout}' 2>/dev/null || true)
+            if [[ -z "$got" || "${layout%%,*}" != "${got%%,*}" ]]; then
+                fallback_reason="checksum drift"
+            fi
+        fi
+    fi
+
+    if [[ -n "$fallback_reason" ]]; then
+        tmux select-layout -t "$target" tiled
+        # Surface the fallback so silent regressions don't masquerade as
+        # "the heuristic just decided to look tiled today".
+        tmux display-message "tmux_explode: column-bias fallback ($fallback_reason)"
+    fi
+}
+
 add_session_attach_pane() {
     local name="$1"
 
@@ -335,7 +429,7 @@ explode_server() {
         add_session_attach_pane "$name"
     done
 
-    tmux select-layout -t "$CURRENT_WIN" tiled
+    apply_column_biased_layout "$CURRENT_WIN"
 }
 
 # ---------------------------------------------------------------------------
@@ -394,7 +488,7 @@ explode_all() {
         add_session_attach_pane "$s"
     done < <(other_session_names)
 
-    tmux select-layout -t "$CURRENT_WIN" tiled
+    apply_column_biased_layout "$CURRENT_WIN"
 }
 
 unexplode_inplace() {

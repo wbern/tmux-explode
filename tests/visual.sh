@@ -721,3 +721,45 @@ fi
 echo "PASS [custom-format round-trip] custom pane-border-format/status preserved"
 
 "${TMUX_CMD[@]}" set-option -gu @explode-scope
+
+# ---------------------------------------------------------------------------
+# Scenario 11: column-biased layout. On a wide window with several panes the
+# new layout builder must place tiles into more columns than tmux's built-in
+# `tiled` would (which biases toward squarish tiles, producing landscape
+# panes that are bad for reading streaming text). Six panes on a 200×50
+# window: tiled would give 3 cols × 2 rows; our heuristic targets aspect
+# ≈0.5 capped at min-width 40 → K=5 columns of taller panes.
+# ---------------------------------------------------------------------------
+cleanup
+"${TMUX_CMD[@]}" new-session -d -s "$HOME_SESSION" -n base -x 200 -y 50
+label_pane "$HOME_SESSION:base.0" "HOME"
+for i in 1 2 3 4 5; do
+    "${TMUX_CMD[@]}" new-session -d -s "wide$i" -n w -x 200 -y 50
+    label_pane "wide$i:w.0" "WIDE$i"
+done
+wait_for_markers "$HOME_SESSION" 1
+for i in 1 2 3 4 5; do
+    wait_for_markers "wide$i" 1
+done
+
+BASE_WIN=$("${TMUX_CMD[@]}" display-message -p -t "$HOME_SESSION:base" '#{window_id}')
+"${TMUX_CMD[@]}" set-option -g @explode-scope server
+run_toggle "$HOME_SESSION:base"
+wait_for_pane_count "$BASE_WIN" 6 \
+    || { echo "FAIL [column-biased] explode never reached 6 panes" >&2; exit 1; }
+
+# Number of distinct pane_left values = number of columns rendered.
+COL_COUNT=$("${TMUX_CMD[@]}" list-panes -t "$BASE_WIN" -F '#{pane_left}' \
+            | sort -nu | wc -l | tr -d ' ')
+if (( COL_COUNT < 4 )); then
+    echo "FAIL [column-biased] expected >=4 columns on 200×50 with 6 panes, got $COL_COUNT" >&2
+    "${TMUX_CMD[@]}" list-panes -t "$BASE_WIN" -F '#{pane_id} L=#{pane_left} T=#{pane_top} #{pane_width}x#{pane_height}' >&2
+    exit 1
+fi
+echo "PASS [column-biased] 200×50 with 6 panes → $COL_COUNT columns (was 3 with tiled)"
+
+run_toggle "$HOME_SESSION:base"
+wait_for_pane_count "$BASE_WIN" 1 \
+    || { echo "FAIL [column-biased] unexplode never reduced to 1 pane" >&2; exit 1; }
+
+"${TMUX_CMD[@]}" set-option -gu @explode-scope

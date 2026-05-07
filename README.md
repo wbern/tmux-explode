@@ -69,6 +69,9 @@ re-sourcing `tmux.conf`.
 | `@explode-style-anchor` | `fg=yellow,bold` | Style applied to the anchor tile's border label (the pane the toggle fired from). Colors the label only — the border line itself is unchanged. In-place walls only. |
 | `@explode-style-local`  | `fg=cyan`   | Style applied to the labels of tiles gathered from other windows of the current session. In-place walls only. |
 | `@explode-style-remote` | `fg=magenta` | Style applied to the labels of nested-attach tiles pointing at sibling sessions. In-place walls only. |
+| `@explode-layout`        | `columns`   | `columns` (default) = column-biased custom layout — taller tiles, better for reading streaming output. `tiled` = tmux's built-in tiled layout (the pre-1.x default). |
+| `@explode-min-pane-width` | `40`        | Floor on per-column width (cells) when the layout builder picks a column count. Prevents tiles from getting too narrow to read on ultrawide screens with many panes. Ignored when `@explode-layout = tiled`. |
+| `@explode-target-aspect` | `0.5`       | Target tile aspect ratio (width ÷ height). Default `0.5` = each tile ≈ 2× as tall as wide. Lower = even taller; `1.0` = square; `2.0` = landscape. Ignored when `@explode-layout = tiled`. |
 
 Example:
 
@@ -81,6 +84,17 @@ set -g @explode-window-name 'glance'
 
 ## Behavior notes
 
+- The wall is laid out with a column-biased custom layout (the new
+  default — earlier versions used tmux's built-in `tiled`). Tiles are
+  taller and narrower (default target aspect `0.5`, i.e. each tile ≈ 2×
+  as tall as wide) so streaming agent output is easier to read.
+  Per-column width is floored at `@explode-min-pane-width` (default 40
+  cells) so on ultrawide screens with many panes you don't end up with a
+  row of unreadable slivers. Set `@explode-layout tiled` to restore the
+  old behavior.
+- Requires bash 4+ (`mapfile`, `declare -A`). Linux distros and Homebrew
+  bash are fine; the macOS-stock `/bin/bash` (3.2) is not — install
+  `brew install bash` if you're on that.
 - Above ~6 windows/sessions the tiled layout becomes cramped; `prefix + w`
   (`choose-tree -Zw`) is genuinely the better tool at that scale.
 - Pane origin is tracked via the per-pane tmux user option `@orig_window`

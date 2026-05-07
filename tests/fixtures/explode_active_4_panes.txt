@@ -1,4 +1,4 @@
-bottom-left   | orig=charlie  | content="CHARLIE"
-bottom-right  | orig=delta    | content="DELTA"
+bottom-left   | orig=bravo    | content="BRAVO-1"
 top-left      | orig=alpha    | content="ALPHA"
-top-right     | orig=bravo    | content="BRAVO-1"
+top-middle    | orig=charlie  | content="CHARLIE"
+top-right     | orig=delta    | content="DELTA"
