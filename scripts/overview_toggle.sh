@@ -347,12 +347,15 @@ stop_heatmap_poller() {
     fi
     tmux set-option -w -u -t "$CURRENT_WIN" "@explode_heat_pid" 2>/dev/null || true
 
+    # Belt-and-braces wipe of the EPHEMERAL markers on every pane still in
+    # CURRENT_WIN (typically just the anchor — locals/remotes have already
+    # been moved/killed by unexplode_inplace's loop, which also wipes
+    # these). @pane_last_change and @pane_first_sight are intentionally
+    # preserved here so a re-explode reflects time elapsed during the gap.
     local pane_id
     while IFS= read -r pane_id; do
         [[ -z "$pane_id" ]] && continue
         tmux set-option -p -u -t "$pane_id" "@pane_last_hash" 2>/dev/null || true
-        tmux set-option -p -u -t "$pane_id" "@pane_last_change" 2>/dev/null || true
-        tmux set-option -p -u -t "$pane_id" "@pane_first_sight" 2>/dev/null || true
         tmux set-option -p -u -t "$pane_id" "@heat" 2>/dev/null || true
         tmux set-option -p -u -t "$pane_id" "@heat_style" 2>/dev/null || true
         tmux set-option -p -u -t "$pane_id" pane-style 2>/dev/null || true
@@ -492,6 +495,33 @@ add_session_attach_pane() {
 
     prune_stranded_overview "$name"
 
+    # Read & consume any saved last_change from a previous wall cycle so the
+    # heatmap bucket reflects time elapsed during the gap instead of
+    # restarting at ⚪. SINGLE-SHOT (unset after read) so a stale value
+    # can't pin every future tile to "stale" if the user stops using the
+    # wall. VALIDATE before trusting — when in doubt, drop it and let the
+    # new attach pane start fresh:
+    #   - must be a positive integer (rejects garbage strings),
+    #   - must not be in the future (clock skew / corruption),
+    #   - must not be older than ~30 days (would round to ❄ anyway, and
+    #     a value that old is more likely corruption than reality).
+    local saved_change=""
+    saved_change=$(tmux show-options -qv -t "$name" "@explode_last_change" 2>/dev/null || true)
+    tmux set-option -u -t "$name" "@explode_last_change" 2>/dev/null || true
+    if [[ -n "$saved_change" ]]; then
+        if [[ ! "$saved_change" =~ ^[0-9]+$ ]] || (( saved_change <= 0 )); then
+            saved_change=""
+        else
+            local _now _age
+            _now=$(date +%s)
+            _age=$(( _now - saved_change ))
+            if (( _age < 0 || _age > 2592000 )); then
+                saved_change=""
+            fi
+            unset _now _age
+        fi
+    fi
+
     # Snapshot the target session's status setting so we can restore it
     # on unexplode. show-options without -g returns ONLY session-local
     # values — if empty, the session is inheriting the global default
@@ -524,6 +554,14 @@ add_session_attach_pane() {
 
     tmux set-option -p -t "$new_pane" "@orig_session" "$name"
     tmux set-option -p -t "$new_pane" "@orig_session_status" "$saved"
+
+    # Stamp the validated saved timestamp on the new pane so the heatmap
+    # poller picks up the prior bucket on its first tick. No-op when the
+    # session has no prior history (first-ever wall against this session,
+    # or saved value failed validation).
+    if [[ -n "$saved_change" ]]; then
+        tmux set-option -p -t "$new_pane" "@pane_last_change" "$saved_change" 2>/dev/null || true
+    fi
 
     # Re-tile between joins so panes don't shrink past tmux's minimum
     # size and trigger 'create pane failed'.
@@ -632,11 +670,37 @@ unexplode_inplace() {
     local SEP=$'\x1f'
     local panes_data
     panes_data=$(tmux list-panes -t "$CURRENT_WIN" \
-                 -F "#{pane_id}${SEP}#{@orig_session}${SEP}#{@orig_session_status}${SEP}#{@orig_window}${SEP}#{@orig_window_id}${SEP}#{@orig_window_index}")
+                 -F "#{pane_id}${SEP}#{@orig_session}${SEP}#{@orig_session_status}${SEP}#{@orig_window}${SEP}#{@orig_window_id}${SEP}#{@orig_window_index}${SEP}#{@pane_last_change}")
 
-    local pane_id orig_session saved orig_name orig_id orig_index
-    while IFS="$SEP" read -r pane_id orig_session saved orig_name orig_id orig_index; do
+    local now_ts
+    now_ts=$(date +%s)
+
+    local pane_id orig_session saved orig_name orig_id orig_index last_change
+    while IFS="$SEP" read -r pane_id orig_session saved orig_name orig_id orig_index last_change; do
+        # Wipe ephemeral wall markers before any pane-moving action so they
+        # don't follow a local pane back to its origin window. We deliberately
+        # KEEP @pane_last_change and @pane_first_sight — those drive the
+        # heatmap bucket calc, and preserving them lets a re-explode reflect
+        # the time elapsed during the gap (a hot pane + 30-min gap → ❄ on
+        # re-explode, correctly cooled). @pane_last_hash IS wiped so the
+        # next first tick re-baselines the hash and doesn't mistake an
+        # accumulated multi-day diff for a fresh change.
+        tmux set-option -p -u -t "$pane_id" "@pane_last_hash" 2>/dev/null || true
+        tmux set-option -p -u -t "$pane_id" "@heat" 2>/dev/null || true
+        tmux set-option -p -u -t "$pane_id" "@heat_style" 2>/dev/null || true
+        tmux set-option -p -u -t "$pane_id" pane-style 2>/dev/null || true
+
         if [[ -n "${orig_session:-}" ]]; then
+            # Stash this remote tile's last-change timestamp on the inner
+            # session so the next explode can re-stamp it on the new attach
+            # pane. Validate before storing — a bogus value here would
+            # corrupt every future wall against this session.
+            if [[ -n "${last_change:-}" ]] \
+               && [[ "$last_change" =~ ^[0-9]+$ ]] \
+               && (( last_change > 0 && last_change <= now_ts )); then
+                tmux set-option -t "$orig_session" "@explode_last_change" "$last_change" 2>/dev/null || true
+            fi
+
             # Restore the target session's status setting. `unset` means the
             # session was inheriting the global default — use -u to drop the
             # session-local override rather than pinning a value.

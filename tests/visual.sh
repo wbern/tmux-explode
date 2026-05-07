@@ -858,14 +858,18 @@ if kill -0 "$HEAT_PID" 2>/dev/null; then
 fi
 
 ANCHOR_PANE=$("${TMUX_CMD[@]}" list-panes -t "$BASE_WIN" -F '#{pane_id}' | head -1)
-for opt in "@heat" "@heat_style" "@pane_last_hash" "@pane_last_change" "@pane_first_sight" "pane-style"; do
+# Ephemeral markers MUST be wiped — they affect rendering or seed the next
+# wall's hash baseline. @pane_last_change / @pane_first_sight are
+# intentionally PRESERVED across teardown (see persistence scenarios
+# below) so a re-explode reflects the gap, so they're not in this list.
+for opt in "@heat" "@heat_style" "@pane_last_hash" "pane-style"; do
     leaked=$("${TMUX_CMD[@]}" show-options -pqv -t "$ANCHOR_PANE" "$opt")
     if [[ -n "$leaked" ]]; then
         echo "FAIL [heatmap teardown] $opt leaked on anchor pane: '$leaked'" >&2
         exit 1
     fi
 done
-echo "PASS [heatmap teardown] poller killed and per-pane markers cleared"
+echo "PASS [heatmap teardown] poller killed and ephemeral markers cleared"
 
 "${TMUX_CMD[@]}" set-option -gu @explode-scope
 
@@ -992,5 +996,165 @@ echo "PASS [stranded prune safety] session-destroying prune refused"
 run_toggle "$HOME_SESSION:base"
 wait_for_pane_count "$BASE_WIN" 1 \
     || { echo "FAIL [stranded prune safety teardown] base never reduced to 1 pane" >&2; exit 1; }
+
+"${TMUX_CMD[@]}" set-option -gu @explode-scope
+
+# ---------------------------------------------------------------------------
+# Scenario 14: heat-state persistence across toggle cycles.
+#   (a) Local pane (rejoined to origin window) keeps @pane_last_change so
+#       a re-explode reflects time elapsed during the gap.
+#   (b) Remote/nested-attach pane stashes @pane_last_change on its inner
+#       session at unexplode; the next explode re-stamps it on the new
+#       attach pane and clears the session option (single-shot).
+#   (c) Garbage / out-of-range saved values are silently dropped — the
+#       new attach pane starts fresh rather than being polluted.
+# ---------------------------------------------------------------------------
+
+# (a) Local-pane persistence
+cleanup
+"${TMUX_CMD[@]}" new-session -d -s "$HOME_SESSION" -n base -x 120 -y 40
+label_pane "$HOME_SESSION:base.0" "HOME"
+"${TMUX_CMD[@]}" new-window -t "$HOME_SESSION:" -n extra
+label_pane "$HOME_SESSION:extra.0" "EXTRA"
+"${TMUX_CMD[@]}" select-window -t "$HOME_SESSION:base"
+"${TMUX_CMD[@]}" new-session -d -s "sib1" -n w1 -x 120 -y 40
+label_pane "sib1:w1.0" "SIB1"
+wait_for_markers "$HOME_SESSION" 2
+wait_for_markers "sib1" 1
+
+EXTRA_PANE=$("${TMUX_CMD[@]}" display-message -p -t "$HOME_SESSION:extra" '#{pane_id}')
+FAKE_TS=$(( $(date +%s) - 3600 ))    # 1 hour ago — would land on ❄
+"${TMUX_CMD[@]}" set-option -p -t "$EXTRA_PANE" "@pane_last_change" "$FAKE_TS"
+
+BASE_WIN=$("${TMUX_CMD[@]}" display-message -p -t "$HOME_SESSION:base" '#{window_id}')
+"${TMUX_CMD[@]}" set-option -g @explode-scope all
+run_toggle "$HOME_SESSION:base"
+wait_for_pane_count "$BASE_WIN" 3 \
+    || { echo "FAIL [persist local] explode never reached 3 panes" >&2; exit 1; }
+
+# Unexplode — extra's pane rejoins origin. @pane_last_change should survive.
+run_toggle "$HOME_SESSION:base"
+wait_for_pane_count "$BASE_WIN" 1 \
+    || { echo "FAIL [persist local] base never reduced to 1 pane" >&2; exit 1; }
+
+POST_TS=$("${TMUX_CMD[@]}" show-options -pqv -t "$EXTRA_PANE" "@pane_last_change")
+if [[ "$POST_TS" != "$FAKE_TS" ]]; then
+    echo "FAIL [persist local] @pane_last_change not preserved on rejoined pane: was '$FAKE_TS', now '$POST_TS'" >&2
+    exit 1
+fi
+# @pane_last_hash MUST be cleared so the next wall re-baselines.
+POST_HASH=$("${TMUX_CMD[@]}" show-options -pqv -t "$EXTRA_PANE" "@pane_last_hash")
+if [[ -n "$POST_HASH" ]]; then
+    echo "FAIL [persist local] @pane_last_hash leaked on rejoined pane: '$POST_HASH'" >&2
+    exit 1
+fi
+echo "PASS [persist local] @pane_last_change survived unexplode, @pane_last_hash cleared"
+
+"${TMUX_CMD[@]}" set-option -gu @explode-scope
+
+# (b) Remote/nested-attach persistence — stash on session, re-stamp on next attach
+cleanup
+"${TMUX_CMD[@]}" new-session -d -s "$HOME_SESSION" -n base -x 120 -y 40
+label_pane "$HOME_SESSION:base.0" "HOME"
+"${TMUX_CMD[@]}" new-session -d -s "sib1" -n w1 -x 120 -y 40
+label_pane "sib1:w1.0" "SIB1"
+wait_for_markers "$HOME_SESSION" 1
+wait_for_markers "sib1" 1
+
+BASE_WIN=$("${TMUX_CMD[@]}" display-message -p -t "$HOME_SESSION:base" '#{window_id}')
+"${TMUX_CMD[@]}" set-option -g @explode-scope server
+run_toggle "$HOME_SESSION:base"
+wait_for_pane_count "$BASE_WIN" 2 \
+    || { echo "FAIL [persist remote] explode never reached 2 panes" >&2; exit 1; }
+
+# Forge a known last_change on the sib1 attach tile, then unexplode.
+SIB_TILE=$("${TMUX_CMD[@]}" list-panes -t "$BASE_WIN" \
+           -F '#{pane_id} #{@orig_session}' | awk '$2=="sib1" {print $1}')
+if [[ -z "$SIB_TILE" ]]; then
+    echo "FAIL [persist remote] could not find sib1 attach tile" >&2
+    exit 1
+fi
+FAKE_TS=$(( $(date +%s) - 7200 ))    # 2 hours ago
+"${TMUX_CMD[@]}" set-option -p -t "$SIB_TILE" "@pane_last_change" "$FAKE_TS"
+
+run_toggle "$HOME_SESSION:base"
+wait_for_pane_count "$BASE_WIN" 1 \
+    || { echo "FAIL [persist remote] base never reduced to 1 pane" >&2; exit 1; }
+
+# After unexplode: sib1 session should carry @explode_last_change == FAKE_TS.
+SESSION_TS=$("${TMUX_CMD[@]}" show-options -qv -t "sib1" "@explode_last_change")
+if [[ "$SESSION_TS" != "$FAKE_TS" ]]; then
+    echo "FAIL [persist remote] sib1 session missing/wrong @explode_last_change: '$SESSION_TS' vs '$FAKE_TS'" >&2
+    exit 1
+fi
+
+# Re-explode: new attach pane should be stamped with FAKE_TS, AND the
+# session-scope option should be unset (single-shot consumption).
+run_toggle "$HOME_SESSION:base"
+wait_for_pane_count "$BASE_WIN" 2 \
+    || { echo "FAIL [persist remote] re-explode never reached 2 panes" >&2; exit 1; }
+
+NEW_TILE=$("${TMUX_CMD[@]}" list-panes -t "$BASE_WIN" \
+           -F '#{pane_id} #{@orig_session}' | awk '$2=="sib1" {print $1}')
+NEW_TS=$("${TMUX_CMD[@]}" show-options -pqv -t "$NEW_TILE" "@pane_last_change")
+if [[ "$NEW_TS" != "$FAKE_TS" ]]; then
+    echo "FAIL [persist remote] new attach pane missing stamped @pane_last_change: '$NEW_TS' vs '$FAKE_TS'" >&2
+    exit 1
+fi
+
+POST_SESSION_TS=$("${TMUX_CMD[@]}" show-options -qv -t "sib1" "@explode_last_change")
+if [[ -n "$POST_SESSION_TS" ]]; then
+    echo "FAIL [persist remote] @explode_last_change not cleared after consumption: '$POST_SESSION_TS'" >&2
+    exit 1
+fi
+echo "PASS [persist remote] cross-cycle stash + single-shot consume works"
+
+run_toggle "$HOME_SESSION:base"
+wait_for_pane_count "$BASE_WIN" 1 \
+    || { echo "FAIL [persist remote teardown] base never reduced to 1 pane" >&2; exit 1; }
+"${TMUX_CMD[@]}" set-option -gu @explode-scope
+
+# (c) Garbage saved values are dropped silently
+cleanup
+"${TMUX_CMD[@]}" new-session -d -s "$HOME_SESSION" -n base -x 120 -y 40
+label_pane "$HOME_SESSION:base.0" "HOME"
+"${TMUX_CMD[@]}" new-session -d -s "sib1" -n w1 -x 120 -y 40
+label_pane "sib1:w1.0" "SIB1"
+wait_for_markers "$HOME_SESSION" 1
+wait_for_markers "sib1" 1
+BASE_WIN=$("${TMUX_CMD[@]}" display-message -p -t "$HOME_SESSION:base" '#{window_id}')
+
+# Cases that must all be rejected: non-numeric, future timestamp,
+# very-old timestamp (>30 days). For each, the new attach pane must NOT
+# carry the bogus value, and the session option must still be cleared.
+NOW_TS=$(date +%s)
+FUTURE_TS=$(( NOW_TS + 86400 ))                # tomorrow
+ANCIENT_TS=$(( NOW_TS - 60 * 86400 ))          # 60 days ago
+
+for bogus in "not-a-number" "$FUTURE_TS" "$ANCIENT_TS" "-1"; do
+    "${TMUX_CMD[@]}" set-option -t "sib1" "@explode_last_change" "$bogus"
+    "${TMUX_CMD[@]}" set-option -g @explode-scope server
+    run_toggle "$HOME_SESSION:base"
+    wait_for_pane_count "$BASE_WIN" 2 \
+        || { echo "FAIL [persist garbage='$bogus'] explode never reached 2 panes" >&2; exit 1; }
+
+    NEW_TILE=$("${TMUX_CMD[@]}" list-panes -t "$BASE_WIN" \
+               -F '#{pane_id} #{@orig_session}' | awk '$2=="sib1" {print $1}')
+    STAMPED=$("${TMUX_CMD[@]}" show-options -pqv -t "$NEW_TILE" "@pane_last_change")
+    if [[ -n "$STAMPED" ]]; then
+        echo "FAIL [persist garbage='$bogus'] bogus value leaked onto pane: '$STAMPED'" >&2
+        exit 1
+    fi
+    LEFT=$("${TMUX_CMD[@]}" show-options -qv -t "sib1" "@explode_last_change")
+    if [[ -n "$LEFT" ]]; then
+        echo "FAIL [persist garbage='$bogus'] session option not cleared: '$LEFT'" >&2
+        exit 1
+    fi
+
+    run_toggle "$HOME_SESSION:base"
+    wait_for_pane_count "$BASE_WIN" 1 \
+        || { echo "FAIL [persist garbage='$bogus' teardown] base never reduced to 1 pane" >&2; exit 1; }
+done
+echo "PASS [persist garbage] non-numeric / future / ancient values all dropped"
 
 "${TMUX_CMD[@]}" set-option -gu @explode-scope
