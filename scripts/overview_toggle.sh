@@ -356,6 +356,25 @@ stop_heatmap_poller() {
     pid=$(tmux show-options -wqv -t "$CURRENT_WIN" "@explode_heat_pid" 2>/dev/null || true)
     if [[ -n "$pid" ]]; then
         kill "$pid" 2>/dev/null || true
+        # WAIT for the poller to actually exit before we touch pane
+        # styles. SIGTERM is async — without this wait, the poller can
+        # still finish a tick AFTER our belt-and-braces `select-pane -P
+        # default` below, re-applying a `bg=#…` cool/cold style and
+        # leaving the user with a stained pane after toggle-off. Poll
+        # `kill -0` in short bursts up to ~1s; then SIGKILL as a backstop
+        # so a wedged poller can't deadlock teardown.
+        local n
+        for n in 1 2 3 4 5 6 7 8 9 10; do
+            kill -0 "$pid" 2>/dev/null || break
+            sleep 0.1
+        done
+        if kill -0 "$pid" 2>/dev/null; then
+            kill -9 "$pid" 2>/dev/null || true
+            for n in 1 2 3 4 5; do
+                kill -0 "$pid" 2>/dev/null || break
+                sleep 0.1
+            done
+        fi
     fi
     tmux set-option -w -u -t "$CURRENT_WIN" "@explode_heat_pid" 2>/dev/null || true
 
@@ -558,11 +577,24 @@ teardown_inplace_wall() {
     local wid="$1" sess="$2"
 
     # Stop the poller FIRST so a final tick can't race with our pane
-    # marker wipes.
-    local pid
+    # marker wipes. Wait for the process to actually exit (SIGTERM is
+    # async — see stop_heatmap_poller for the full reasoning) before
+    # touching any pane styles.
+    local pid n
     pid=$(tmux show-options -wqv -t "$wid" "@explode_heat_pid" 2>/dev/null || true)
     if [[ -n "$pid" ]]; then
         kill "$pid" 2>/dev/null || true
+        for n in 1 2 3 4 5 6 7 8 9 10; do
+            kill -0 "$pid" 2>/dev/null || break
+            sleep 0.1
+        done
+        if kill -0 "$pid" 2>/dev/null; then
+            kill -9 "$pid" 2>/dev/null || true
+            for n in 1 2 3 4 5; do
+                kill -0 "$pid" 2>/dev/null || break
+                sleep 0.1
+            done
+        fi
     fi
     tmux set-option -w -u -t "$wid" "@explode_heat_pid" 2>/dev/null || true
 
@@ -960,6 +992,13 @@ explode_all() {
 }
 
 unexplode_inplace() {
+    # Stop the heatmap poller FIRST so it can't re-apply a `bg=#…` style
+    # between our per-pane wipe and a join-pane-back-to-origin (a local
+    # pane joined back with the dim style still on it would carry the
+    # stain into another window). teardown_wall_borders calls this again
+    # at the end; the second pass is a no-op (PID already dead).
+    stop_heatmap_poller
+
     local live_windows
     live_windows=$(tmux list-windows -t "$SESSION" -F '#{window_id}')
 

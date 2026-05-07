@@ -862,10 +862,24 @@ ANCHOR_PANE=$("${TMUX_CMD[@]}" list-panes -t "$BASE_WIN" -F '#{pane_id}' | head 
 # wall's hash baseline. @pane_last_change / @pane_first_sight are
 # intentionally PRESERVED across teardown (see persistence scenarios
 # below) so a re-explode reflects the gap, so they're not in this list.
-for opt in "@heat" "@heat_style" "@pane_last_hash" "pane-style"; do
+for opt in "@heat" "@heat_style" "@pane_last_hash"; do
     leaked=$("${TMUX_CMD[@]}" show-options -pqv -t "$ANCHOR_PANE" "$opt")
     if [[ -n "$leaked" ]]; then
         echo "FAIL [heatmap teardown] $opt leaked on anchor pane: '$leaked'" >&2
+        exit 1
+    fi
+done
+
+# Per-pane style must be reset to "default". `select-pane -P bg=#…`
+# under the hood sets `window-style` and `window-active-style` at the
+# pane scope (the option name `pane-style` doesn't exist in tmux 3.x —
+# the earlier check on `pane-style` was a silent no-op). If the dim
+# style leaks past unexplode, the anchor pane stays dark-blue after
+# toggle-off.
+for opt in "window-style" "window-active-style"; do
+    style=$("${TMUX_CMD[@]}" show-options -pqv -t "$ANCHOR_PANE" "$opt")
+    if [[ -n "$style" && "$style" != "default" ]]; then
+        echo "FAIL [heatmap teardown] $opt leaked on anchor pane: '$style'" >&2
         exit 1
     fi
 done
@@ -1431,5 +1445,70 @@ if [[ -n "$POST_WS_INHERIT" ]]; then
     exit 1
 fi
 echo "PASS [window-size inherit] inherited window-size returns to inheriting on unexplode"
+
+"${TMUX_CMD[@]}" set-option -gu @explode-scope
+
+# ---------------------------------------------------------------------------
+# Scenario 18: dim-style cleanup race — anchor pane must NOT carry the
+# heatmap's cool/cold bg after unexplode.
+#
+# Repro: pre-stamp the anchor pane with a @pane_last_change far in the
+# past so the poller's first tick decides the bucket is ❄ and applies
+# bg=#10102a via `select-pane -P`. Without the fix, unexplode_inplace's
+# per-pane wipe ran BEFORE stop_heatmap_poller, so the still-running
+# poller could re-apply the style on its next tick — leaving the user
+# with a dark-blue anchor pane after toggle-off.
+# ---------------------------------------------------------------------------
+cleanup
+"${TMUX_CMD[@]}" new-session -d -s "$HOME_SESSION" -n base -x 120 -y 40
+label_pane "$HOME_SESSION:base.0" "HOME"
+"${TMUX_CMD[@]}" new-session -d -s "dimsib" -n w -x 120 -y 40
+label_pane "dimsib:w.0" "DIMSIB"
+wait_for_markers "$HOME_SESSION" 1
+wait_for_markers "dimsib" 1
+
+BASE_WIN=$("${TMUX_CMD[@]}" display-message -p -t "$HOME_SESSION:base" '#{window_id}')
+ANCHOR_PANE=$("${TMUX_CMD[@]}" list-panes -t "$BASE_WIN" -F '#{pane_id}' | head -1)
+
+# Pre-stamp last_change to 200s ago — past the 120s ❄ threshold.
+NOW_TS=$(date +%s)
+"${TMUX_CMD[@]}" set-option -p -t "$ANCHOR_PANE" "@pane_last_change" "$((NOW_TS - 200))"
+
+"${TMUX_CMD[@]}" set-option -g @explode-scope server
+run_toggle "$HOME_SESSION:base"
+wait_for_pane_count "$BASE_WIN" 2 \
+    || { echo "FAIL [dim-cleanup] explode never reached 2 panes" >&2; exit 1; }
+
+# Wait up to 6s for the poller to apply the cold bg.
+saw_dim=""
+for _ in 1 2 3 4 5 6; do
+    style=$("${TMUX_CMD[@]}" show-options -pqv -t "$ANCHOR_PANE" "window-style")
+    if [[ "$style" == bg=* ]]; then
+        saw_dim="$style"
+        break
+    fi
+    sleep 1
+done
+if [[ -z "$saw_dim" ]]; then
+    echo "FAIL [dim-cleanup] poller never applied a bg style to the anchor (got '$style')" >&2
+    exit 1
+fi
+
+run_toggle "$HOME_SESSION:base"
+wait_for_pane_count "$BASE_WIN" 1 \
+    || { echo "FAIL [dim-cleanup] unexplode never reduced to 1 pane" >&2; exit 1; }
+
+# Give any racing poller tick a generous beat to misbehave.
+sleep 3
+
+POST_STYLE=$("${TMUX_CMD[@]}" show-options -pqv -t "$ANCHOR_PANE" "window-style")
+POST_ASTYLE=$("${TMUX_CMD[@]}" show-options -pqv -t "$ANCHOR_PANE" "window-active-style")
+for s in "$POST_STYLE" "$POST_ASTYLE"; do
+    if [[ -n "$s" && "$s" != "default" ]]; then
+        echo "FAIL [dim-cleanup] anchor pane retains bg style after unexplode: '$s'" >&2
+        exit 1
+    fi
+done
+echo "PASS [dim-cleanup] anchor pane bg cleared after unexplode (was '$saw_dim' during)"
 
 "${TMUX_CMD[@]}" set-option -gu @explode-scope
