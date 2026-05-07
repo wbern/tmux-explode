@@ -620,7 +620,7 @@ if [[ "$WALL_STATUS" != "top" ]]; then
 fi
 
 WALL_FORMAT=$("${TMUX_CMD[@]}" show-options -wqv -t "$BASE_WIN" pane-border-format)
-for needle in "@orig_session" "@orig_window" "fg=yellow#,bold" "fg=cyan" "fg=magenta" "◉ here" "◫" "⇄"; do
+for needle in "@heat" "@orig_session" "@orig_window" "fg=yellow#,bold" "fg=cyan" "fg=magenta" "◉ here" "◫" "⇄"; do
     if [[ "$WALL_FORMAT" != *"$needle"* ]]; then
         echo "FAIL [tile labels] pane-border-format missing '$needle': '$WALL_FORMAT'" >&2
         exit 1
@@ -761,5 +761,88 @@ echo "PASS [column-biased] 200×50 with 6 panes → $COL_COUNT columns (was 3 wi
 run_toggle "$HOME_SESSION:base"
 wait_for_pane_count "$BASE_WIN" 1 \
     || { echo "FAIL [column-biased] unexplode never reduced to 1 pane" >&2; exit 1; }
+
+"${TMUX_CMD[@]}" set-option -gu @explode-scope
+
+# ---------------------------------------------------------------------------
+# Scenario 12: heatmap poller sets @heat on tiles after a tick, stashes its
+# PID on the wall window, and cleans up on unexplode (PID gone, per-pane
+# markers wiped). Bucket *content* is timing-dependent and tested only
+# loosely (must be one of the four glyphs); presence is the firm assertion.
+# ---------------------------------------------------------------------------
+cleanup
+"${TMUX_CMD[@]}" new-session -d -s "$HOME_SESSION" -n base -x 120 -y 40
+label_pane "$HOME_SESSION:base.0" "HOME"
+"${TMUX_CMD[@]}" new-session -d -s "sib1" -n w1 -x 120 -y 40
+label_pane "sib1:w1.0" "SIB1"
+wait_for_markers "$HOME_SESSION" 1
+wait_for_markers "sib1" 1
+
+BASE_WIN=$("${TMUX_CMD[@]}" display-message -p -t "$HOME_SESSION:base" '#{window_id}')
+"${TMUX_CMD[@]}" set-option -g @explode-scope all
+run_toggle "$HOME_SESSION:base"
+wait_for_pane_count "$BASE_WIN" 2 \
+    || { echo "FAIL [heatmap] explode never reached 2 panes" >&2; exit 1; }
+
+HEAT_PID=$("${TMUX_CMD[@]}" show-options -wqv -t "$BASE_WIN" "@explode_heat_pid")
+if [[ -z "$HEAT_PID" ]] || ! kill -0 "$HEAT_PID" 2>/dev/null; then
+    echo "FAIL [heatmap] poller PID not stashed or process not alive: '$HEAT_PID'" >&2
+    exit 1
+fi
+
+# Poller ticks every ~2s; give it up to 6s to set @heat on at least one
+# pane. Tighter than that flakes on slow CI runners.
+saw_heat=""
+for _ in 1 2 3 4 5 6; do
+    while IFS= read -r p; do
+        [[ -z "$p" ]] && continue
+        h=$("${TMUX_CMD[@]}" show-options -pqv -t "$p" "@heat")
+        if [[ -n "$h" ]]; then
+            saw_heat="$h"
+            break 2
+        fi
+    done < <("${TMUX_CMD[@]}" list-panes -t "$BASE_WIN" -F '#{pane_id}')
+    sleep 1
+done
+
+case "$saw_heat" in
+    🔥|🌶|💤|❄) echo "PASS [heatmap] poller set @heat=$saw_heat on at least one tile" ;;
+    *) echo "FAIL [heatmap] no tile got @heat after 6s, got '$saw_heat'" >&2; exit 1 ;;
+esac
+
+run_toggle "$HOME_SESSION:base"
+wait_for_pane_count "$BASE_WIN" 1 \
+    || { echo "FAIL [heatmap teardown] base never reduced to 1 pane" >&2; exit 1; }
+
+# Poller PID stashed on the wall window must be unset and the process
+# itself reaped. Per-pane heat markers must be cleared from the surviving
+# anchor pane.
+POST_PID=$("${TMUX_CMD[@]}" show-options -wqv -t "$BASE_WIN" "@explode_heat_pid")
+if [[ -n "$POST_PID" ]]; then
+    echo "FAIL [heatmap teardown] @explode_heat_pid leaked: '$POST_PID'" >&2
+    exit 1
+fi
+# Give the poller a beat to notice the window is gone and exit on its
+# own; SIGTERM should already have done the job, but a slow scheduler
+# can leave a zombie window of a few hundred ms.
+for _ in 1 2 3 4 5; do
+    kill -0 "$HEAT_PID" 2>/dev/null || break
+    sleep 1
+done
+if kill -0 "$HEAT_PID" 2>/dev/null; then
+    echo "FAIL [heatmap teardown] poller PID $HEAT_PID still alive after toggle-off" >&2
+    kill "$HEAT_PID" 2>/dev/null || true
+    exit 1
+fi
+
+ANCHOR_PANE=$("${TMUX_CMD[@]}" list-panes -t "$BASE_WIN" -F '#{pane_id}' | head -1)
+for opt in "@heat" "@pane_last_hash" "@pane_last_change"; do
+    leaked=$("${TMUX_CMD[@]}" show-options -pqv -t "$ANCHOR_PANE" "$opt")
+    if [[ -n "$leaked" ]]; then
+        echo "FAIL [heatmap teardown] $opt leaked on anchor pane: '$leaked'" >&2
+        exit 1
+    fi
+done
+echo "PASS [heatmap teardown] poller killed and per-pane markers cleared"
 
 "${TMUX_CMD[@]}" set-option -gu @explode-scope

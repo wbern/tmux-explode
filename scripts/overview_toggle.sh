@@ -258,7 +258,19 @@ WALL_STYLE_REMOTE=$(get_tmux_option "@explode-style-remote" "fg=magenta")
 WALL_FMT_ANCHOR=${WALL_STYLE_ANCHOR//,/#,}
 WALL_FMT_LOCAL=${WALL_STYLE_LOCAL//,/#,}
 WALL_FMT_REMOTE=${WALL_STYLE_REMOTE//,/#,}
-WALL_BORDER_FORMAT=" #{?@orig_session,#[${WALL_FMT_REMOTE}]⇄ #{@orig_session},#{?@orig_window,#[${WALL_FMT_LOCAL}]◫ #{@orig_window},#[${WALL_FMT_ANCHOR}]◉ here}} "
+
+# Per-pane activity heatmap. The background poller (heatmap_poller.sh)
+# writes a bucket glyph to per-pane `@heat`. Conditional `?@heat,...,` so
+# the slot stays blank during the first tick before the poller has run,
+# and stays blank entirely when the heatmap is disabled.
+HEATMAP_ENABLED=$(get_tmux_option "@explode-heatmap" "on")
+if [[ "$HEATMAP_ENABLED" != "off" ]]; then
+    WALL_HEAT_PREFIX='#{?@heat,#{@heat} ,}'
+else
+    WALL_HEAT_PREFIX=''
+fi
+
+WALL_BORDER_FORMAT=" ${WALL_HEAT_PREFIX}#{?@orig_session,#[${WALL_FMT_REMOTE}]⇄ #{@orig_session},#{?@orig_window,#[${WALL_FMT_LOCAL}]◫ #{@orig_window},#[${WALL_FMT_ANCHOR}]◉ here}} "
 
 # Save the current window-scoped border options on the wall window itself so
 # unexplode can put them back. `-wqv` returns just the value (unwrapped — tmux
@@ -284,9 +296,61 @@ setup_wall_borders() {
 
     tmux set-option -w -t "$CURRENT_WIN" pane-border-status top
     tmux set-option -w -t "$CURRENT_WIN" pane-border-format "$WALL_BORDER_FORMAT"
+
+    start_heatmap_poller
+}
+
+# Spawn the per-pane activity heatmap poller and stash its PID on the
+# wall window. Belt-and-braces: kill any prior poller PID first in case
+# explode crashed mid-tick last time and never reached teardown.
+start_heatmap_poller() {
+    [[ "$HEATMAP_ENABLED" == "off" ]] && return 0
+
+    local prev_pid
+    prev_pid=$(tmux show-options -wqv -t "$CURRENT_WIN" "@explode_heat_pid" 2>/dev/null || true)
+    if [[ -n "$prev_pid" ]]; then
+        kill "$prev_pid" 2>/dev/null || true
+    fi
+
+    local poller
+    poller="$(dirname "${BASH_SOURCE[0]}")/heatmap_poller.sh"
+    [[ -x "$poller" ]] || return 0
+
+    # nohup + full redirection lets the poller outlive the run-shell
+    # invocation that fired this script. disown makes sure bash isn't
+    # tracking it as a job we'd block on.
+    nohup bash "$poller" "$SOCKET_PATH" "$CURRENT_WIN" </dev/null >/dev/null 2>&1 &
+    local pid=$!
+    disown 2>/dev/null || true
+    tmux set-option -w -t "$CURRENT_WIN" "@explode_heat_pid" "$pid"
+}
+
+# Stop the poller and wipe per-pane heat markers so panes that get
+# rejoined to their origin window don't carry stale @heat / @pane_*
+# options into a non-walled context.
+stop_heatmap_poller() {
+    local pid
+    pid=$(tmux show-options -wqv -t "$CURRENT_WIN" "@explode_heat_pid" 2>/dev/null || true)
+    if [[ -n "$pid" ]]; then
+        kill "$pid" 2>/dev/null || true
+    fi
+    tmux set-option -w -u -t "$CURRENT_WIN" "@explode_heat_pid" 2>/dev/null || true
+
+    local pane_id
+    while IFS= read -r pane_id; do
+        [[ -z "$pane_id" ]] && continue
+        tmux set-option -p -u -t "$pane_id" "@pane_last_hash" 2>/dev/null || true
+        tmux set-option -p -u -t "$pane_id" "@pane_last_change" 2>/dev/null || true
+        tmux set-option -p -u -t "$pane_id" "@heat" 2>/dev/null || true
+    done < <(tmux list-panes -t "$CURRENT_WIN" -F '#{pane_id}' 2>/dev/null || true)
 }
 
 teardown_wall_borders() {
+    # Stop the poller BEFORE we tear down per-pane markers so a final tick
+    # can't race with the unset and re-set @heat on a pane that's about to
+    # be broken/joined back to its origin window.
+    stop_heatmap_poller
+
     local saved
     saved=$(tmux show-options -w -t "$CURRENT_WIN" -v "@explode_saved_border_status" 2>/dev/null || true)
     if [[ "$saved" == set:* ]]; then
