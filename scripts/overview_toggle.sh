@@ -333,8 +333,8 @@ start_heatmap_poller() {
     # toggle so option changes take effect without re-sourcing tmux.conf.
     local dim_cold style_cool style_cold
     dim_cold=$(get_tmux_option "@explode-dim-cold" "on")
-    style_cool=$(get_tmux_option "@explode-style-cool" "fg=colour244")
-    style_cold=$(get_tmux_option "@explode-style-cold" "fg=colour240")
+    style_cool=$(get_tmux_option "@explode-style-cool" "bg=colour234")
+    style_cold=$(get_tmux_option "@explode-style-cold" "bg=colour237")
 
     # nohup + full redirection lets the poller outlive the run-shell
     # invocation that fired this script. disown makes sure bash isn't

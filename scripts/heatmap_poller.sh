@@ -20,15 +20,18 @@ SOCKET="${1:?socket path required}"
 WIN_ID="${2:?window id required}"
 TICK="${3:-2}"
 
-# Cool/cold panes get their default fg/bg dimmed via pane-style so the
-# user's eye can skip over quiet tiles without scanning. Apps that emit
-# explicit ANSI colors override these defaults — the dim only "shows
-# through" on uncolored cells — but it's enough of a visual cue on most
-# content. Set EXPLODE_DIM_COLD=off to disable, or override the per-tier
-# styles via EXPLODE_STYLE_COOL / EXPLODE_STYLE_COLD.
+# Cool/cold panes get a dimmed pane-style so the user's eye can skip
+# over quiet tiles without scanning. Defaults set bg= (not fg=) because
+# TUIs like Claude Code emit explicit ANSI fg colors on almost every
+# cell — pane-style fg only "shows through" on cells that don't set fg
+# themselves, which is rare on agent walls. bg dimming is far more
+# reliable: most TUIs leave bg at default, so a slight gray bg recedes
+# the whole tile against the surrounding terminal black. Set
+# EXPLODE_DIM_COLD=off to disable, or override the per-tier styles via
+# EXPLODE_STYLE_COOL / EXPLODE_STYLE_COLD.
 DIM_COLD="${EXPLODE_DIM_COLD:-on}"
-STYLE_COOL="${EXPLODE_STYLE_COOL:-fg=colour244}"
-STYLE_COLD="${EXPLODE_STYLE_COLD:-fg=colour240}"
+STYLE_COOL="${EXPLODE_STYLE_COOL:-bg=colour234}"
+STYLE_COLD="${EXPLODE_STYLE_COLD:-bg=colour237}"
 
 T() { tmux -S "$SOCKET" "$@"; }
 

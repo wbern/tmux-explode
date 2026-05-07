@@ -74,8 +74,8 @@ re-sourcing `tmux.conf`.
 | `@explode-target-aspect` | `0.5`       | Target tile aspect ratio (width ÷ height). Default `0.5` = each tile ≈ 2× as tall as wide. Lower = even taller; `1.0` = square; `2.0` = landscape. Ignored when `@explode-layout = tiled`. |
 | `@explode-heatmap`       | `on`        | When `on`, prepends a per-tile activity heatmap glyph (⚪ no observation yet, 🔥 hot, 🌶 warm, 💤 cool, ❄ cold) to each border label so you can glance at the wall and see which agents are producing output now vs. which have gone quiet. Set to `off` to skip the poller and keep borders unchanged. In-place walls only. |
 | `@explode-dim-cold`      | `on`        | When `on`, the heatmap poller also dims the `pane-style` of cool (💤) and cold (❄) tiles so your eye skips quiet panes. Apps that emit explicit ANSI colors override the dim default — the effect is strongest on uncolored content. Set to `off` to keep the bucket glyph but leave tile colors untouched. Requires `@explode-heatmap` on. |
-| `@explode-style-cool`    | `fg=colour244` | `pane-style` applied to 💤 (cool) tiles. |
-| `@explode-style-cold`    | `fg=colour240` | `pane-style` applied to ❄ (cold) tiles. |
+| `@explode-style-cool`    | `bg=colour234` | `pane-style` applied to 💤 (cool) tiles. Defaults dim the *background* — TUIs like Claude Code emit explicit ANSI fg on almost every cell, so `pane-style fg=` only shows through on uncolored content. A subtle dark-gray bg recedes the whole tile reliably. |
+| `@explode-style-cold`    | `bg=colour237` | `pane-style` applied to ❄ (cold) tiles. Slightly lighter gray than cool so cold tiles stand apart from cool ones. |
 
 Example:
 
