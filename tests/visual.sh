@@ -962,3 +962,35 @@ wait_for_pane_count "$BASE_WIN" 1 \
     || { echo "FAIL [stranded prune negative teardown] base never reduced to 1 pane" >&2; exit 1; }
 
 "${TMUX_CMD[@]}" set-option -gu @explode-scope
+
+# Safety case: if the stranded overview is the target session's ONLY window,
+# pruning it would destroy the session. The guard must keep the session
+# alive even at the cost of a mis-rendered tile.
+cleanup
+"${TMUX_CMD[@]}" new-session -d -s "$HOME_SESSION" -n base -x 120 -y 40
+label_pane "$HOME_SESSION:base.0" "HOME"
+"${TMUX_CMD[@]}" new-session -d -s "lone" -n overview -x 120 -y 40
+LONE_PANE=$("${TMUX_CMD[@]}" display-message -p -t "lone:overview" '#{pane_id}')
+"${TMUX_CMD[@]}" set-option -p -t "$LONE_PANE" "@orig_session" "ghost"
+label_pane "$LONE_PANE" "LONE-STRANDED"
+wait_for_markers "$HOME_SESSION" 1
+wait_for_markers "lone" 1
+"${TMUX_CMD[@]}" detach-client -s "lone" 2>/dev/null || true
+
+BASE_WIN=$("${TMUX_CMD[@]}" display-message -p -t "$HOME_SESSION:base" '#{window_id}')
+"${TMUX_CMD[@]}" set-option -g @explode-scope server
+run_toggle "$HOME_SESSION:base"
+wait_for_pane_count "$BASE_WIN" 2 \
+    || { echo "FAIL [stranded prune safety] explode never reached 2 panes" >&2; exit 1; }
+
+if ! "${TMUX_CMD[@]}" has-session -t "lone" 2>/dev/null; then
+    echo "FAIL [stranded prune safety] target session destroyed by prune of its only window" >&2
+    exit 1
+fi
+echo "PASS [stranded prune safety] session-destroying prune refused"
+
+run_toggle "$HOME_SESSION:base"
+wait_for_pane_count "$BASE_WIN" 1 \
+    || { echo "FAIL [stranded prune safety teardown] base never reduced to 1 pane" >&2; exit 1; }
+
+"${TMUX_CMD[@]}" set-option -gu @explode-scope

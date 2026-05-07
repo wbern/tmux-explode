@@ -460,13 +460,17 @@ prune_stranded_overview() {
                  | head -1 || true)
     [[ -n "$any_client" ]] && return 0
 
+    # If the stranded overview is the session's only window, killing it
+    # would destroy the session itself. Refuse — leave the artifact in
+    # place and let the (likely unhappy) attach inherit it; better a
+    # mis-rendered tile than a vanished session.
     local fallback_wid
     fallback_wid=$(tmux list-windows -t "$name" \
                    -F '#{window_id} #{window_name}' 2>/dev/null \
                    | awk -v ov="$OVERVIEW" '$2!=ov {print $1; exit}')
-    if [[ -n "$fallback_wid" ]]; then
-        tmux select-window -t "$fallback_wid" 2>/dev/null || true
-    fi
+    [[ -z "$fallback_wid" ]] && return 0
+
+    tmux select-window -t "$fallback_wid" 2>/dev/null || true
     tmux kill-window -t "$active_wid" 2>/dev/null || true
 }
 
