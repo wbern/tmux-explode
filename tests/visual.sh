@@ -352,6 +352,15 @@ while (( SECONDS < deadline )); do
 done
 if (( pane_count != 1 )); then
     echo "FAIL [server round-trip] expected 1 pane after unexplode, got $pane_count" >&2
+    echo "--- panes in base window:" >&2
+    "${TMUX_CMD[@]}" list-panes -t "$BASE_WIN" -F '#{pane_id} cmd=#{pane_current_command} orig_session=#{@orig_session}' >&2 || true
+    echo "--- list-clients:" >&2
+    "${TMUX_CMD[@]}" list-clients -F '#{client_session} #{client_tty}' >&2 || true
+    echo "--- pane snapshots:" >&2
+    "${TMUX_CMD[@]}" list-panes -t "$BASE_WIN" -F '#{pane_id}' | while read -r p; do
+        echo "[ $p ]" >&2
+        "${TMUX_CMD[@]}" capture-pane -p -t "$p" >&2 || true
+    done
     exit 1
 fi
 
