@@ -10,11 +10,13 @@ window of split panes, then "unexplodes" them back to their original windows.
 One keybinding to glance at every running terminal at once, then return to
 focused work.
 
-![demo](docs/demo.gif)
+![demo](docs/demo-quick.gif)
 
 (Eight sibling sessions humming away, then `prefix + O` snaps them all into
-one overview. Reproduce with `./tests/record_demo.sh` (needs `asciinema`
-and `agg` on PATH; `brew install asciinema agg`).)
+one overview. Reproduce with `./tests/record_demo.sh --quick` (needs
+`asciinema` and `agg` on PATH; `brew install asciinema agg`). A longer
+walkthrough that visits each session before exploding lives in
+[`docs/demo.gif`](docs/demo.gif).)
 
 ## Install
 

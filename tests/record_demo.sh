@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# Record the README demo: 8 sibling sessions, a quick survey of each, then an
-# in-place explode. Outputs tests/demo.cast and (if agg is on PATH) docs/demo.gif.
+# Record the README demo. Default: 8 sibling sessions, a quick survey of each,
+# then an in-place explode. With --quick: skip the survey, jump straight to
+# the explode (for a punchier README hero gif).
 #
-# Usage: ./tests/record_demo.sh [--no-gif]
+# Outputs tests/demo[-quick].cast and (with agg on PATH) docs/demo[-quick].gif.
+#
+# Usage: ./tests/record_demo.sh [--quick] [--no-gif]
 #
 # Requires: asciinema, tmux, bash 4+. agg is optional but needed for the gif.
 set -euo pipefail
@@ -11,11 +14,24 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SOCKET="explode_demo_$$"
 TMUX_BIN=${TMUX_BIN:-tmux}
 PAINTER="$REPO_ROOT/tests/fixtures/demo_painter.sh"
-CAST="$REPO_ROOT/tests/demo.cast"
-GIF="$REPO_ROOT/docs/demo.gif"
 
 WANT_GIF=1
-[[ "${1:-}" == "--no-gif" ]] && WANT_GIF=0
+QUICK=0
+for arg in "$@"; do
+    case "$arg" in
+        --no-gif) WANT_GIF=0 ;;
+        --quick)  QUICK=1 ;;
+        *) echo "unknown flag: $arg" >&2; exit 2 ;;
+    esac
+done
+
+if [[ "$QUICK" -eq 1 ]]; then
+    CAST="$REPO_ROOT/tests/demo-quick.cast"
+    GIF="$REPO_ROOT/docs/demo-quick.gif"
+else
+    CAST="$REPO_ROOT/tests/demo.cast"
+    GIF="$REPO_ROOT/docs/demo.gif"
+fi
 
 # Inherited TMUX/TMUX_PANE would otherwise route our control commands at the
 # caller's tmux instead of our private socket. Clear before defining the array.
@@ -63,23 +79,35 @@ type_line() {
 # tmux attach. When this driver finishes it kills the server, which exits the
 # attach and ends the recording cleanly.
 (
-    sleep 1.8
-    type_line "# 8 sessions running. let me check on each one…"
-    sleep 1.0
+    if [[ "$QUICK" -eq 1 ]]; then
+        sleep 1.5
+        type_line "# 8 sessions humming away. tedious to keep track…"
+        sleep 0.8
+        type_line "# tmux_explode →"
+        sleep 0.5
+        "${TX[@]}" run-shell -t "$HOME_PANE" "$REPO_ROOT/scripts/overview_toggle.sh"
+        sleep 3.5
+        type_line "# much better."
+        sleep 2.5
+    else
+        sleep 1.8
+        type_line "# 8 sessions running. let me check on each one…"
+        sleep 1.0
 
-    for s in "${ORDER[@]}"; do
-        "${TX[@]}" switch-client -t "$s"
-        sleep 1.4
-    done
+        for s in "${ORDER[@]}"; do
+            "${TX[@]}" switch-client -t "$s"
+            sleep 1.4
+        done
 
-    "${TX[@]}" switch-client -t home
-    sleep 0.6
-    type_line "# tedious. tmux_explode →"
-    sleep 0.6
-    "${TX[@]}" run-shell -t "$HOME_PANE" "$REPO_ROOT/scripts/overview_toggle.sh"
-    sleep 5.0
-    type_line "# much better."
-    sleep 3.0
+        "${TX[@]}" switch-client -t home
+        sleep 0.6
+        type_line "# tedious. tmux_explode →"
+        sleep 0.6
+        "${TX[@]}" run-shell -t "$HOME_PANE" "$REPO_ROOT/scripts/overview_toggle.sh"
+        sleep 5.0
+        type_line "# much better."
+        sleep 3.0
+    fi
     "${TX[@]}" kill-server 2>/dev/null || true
 ) &
 DRIVER=$!
