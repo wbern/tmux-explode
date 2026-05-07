@@ -868,3 +868,97 @@ done
 echo "PASS [heatmap teardown] poller killed and per-pane markers cleared"
 
 "${TMUX_CMD[@]}" set-option -gu @explode-scope
+
+# ---------------------------------------------------------------------------
+# Scenario 13: stranded overview pruning. A previous explode that didn't
+# tear down cleanly leaves a target session with `overview` as its active
+# window — then a fresh `tmux attach -t <name>` from add_session_attach_pane
+# inherits that window and the new tile renders someone else's content.
+# add_session_attach_pane must detect and prune the stranded artifact.
+# ---------------------------------------------------------------------------
+cleanup
+"${TMUX_CMD[@]}" new-session -d -s "$HOME_SESSION" -n base -x 120 -y 40
+label_pane "$HOME_SESSION:base.0" "HOME"
+"${TMUX_CMD[@]}" new-session -d -s "victim" -n real -x 120 -y 40
+label_pane "victim:real.0" "VICTIM-REAL"
+wait_for_markers "$HOME_SESSION" 1
+wait_for_markers "victim" 1
+
+# Forge the stranded state: an extra window in `victim` named "overview"
+# with a pane carrying our @orig_session marker, and victim's active
+# window set to it. Mirrors what a crashed explode would leave behind.
+"${TMUX_CMD[@]}" new-window -t "victim:" -n overview
+STRAY_PANE=$("${TMUX_CMD[@]}" display-message -p -t "victim:overview" '#{pane_id}')
+"${TMUX_CMD[@]}" set-option -p -t "$STRAY_PANE" "@orig_session" "ghost"
+label_pane "$STRAY_PANE" "STRANDED"
+"${TMUX_CMD[@]}" select-window -t "victim:overview"
+
+# Detach all clients so prune_stranded_overview considers it safe to clean.
+"${TMUX_CMD[@]}" detach-client -s "victim" 2>/dev/null || true
+
+VICTIM_ACTIVE_BEFORE=$("${TMUX_CMD[@]}" display-message -p -t "victim" '#{window_name}')
+if [[ "$VICTIM_ACTIVE_BEFORE" != "overview" ]]; then
+    echo "FAIL [stranded prune] precondition: victim's active window not 'overview', got '$VICTIM_ACTIVE_BEFORE'" >&2
+    exit 1
+fi
+
+BASE_WIN=$("${TMUX_CMD[@]}" display-message -p -t "$HOME_SESSION:base" '#{window_id}')
+"${TMUX_CMD[@]}" set-option -g @explode-scope server
+run_toggle "$HOME_SESSION:base"
+
+wait_for_pane_count "$BASE_WIN" 2 \
+    || { echo "FAIL [stranded prune] explode never reached 2 panes" >&2; exit 1; }
+
+# After explode: victim's overview window must be gone, and victim's active
+# window should now be `real` (the only remaining non-overview window).
+if "${TMUX_CMD[@]}" list-windows -t "victim" -F '#{window_name}' | grep -Fxq overview; then
+    echo "FAIL [stranded prune] stranded overview window not removed" >&2
+    "${TMUX_CMD[@]}" list-windows -t "victim" >&2
+    exit 1
+fi
+VICTIM_ACTIVE_AFTER=$("${TMUX_CMD[@]}" display-message -p -t "victim" '#{window_name}')
+if [[ "$VICTIM_ACTIVE_AFTER" != "real" ]]; then
+    echo "FAIL [stranded prune] expected victim active window=real, got '$VICTIM_ACTIVE_AFTER'" >&2
+    exit 1
+fi
+echo "PASS [stranded prune] forged stranded overview removed before nested attach"
+
+run_toggle "$HOME_SESSION:base"
+wait_for_pane_count "$BASE_WIN" 1 \
+    || { echo "FAIL [stranded prune teardown] base never reduced to 1 pane" >&2; exit 1; }
+
+"${TMUX_CMD[@]}" set-option -gu @explode-scope
+
+# Negative case: a real user-named "overview" window with NO @orig_*
+# artifacts must NOT be pruned — that's the user's window, not our artifact.
+cleanup
+"${TMUX_CMD[@]}" new-session -d -s "$HOME_SESSION" -n base -x 120 -y 40
+label_pane "$HOME_SESSION:base.0" "HOME"
+"${TMUX_CMD[@]}" new-session -d -s "owner" -n real -x 120 -y 40
+label_pane "owner:real.0" "OWNER-REAL"
+wait_for_markers "$HOME_SESSION" 1
+wait_for_markers "owner" 1
+
+"${TMUX_CMD[@]}" new-window -t "owner:" -n overview
+USER_PANE=$("${TMUX_CMD[@]}" display-message -p -t "owner:overview" '#{pane_id}')
+label_pane "$USER_PANE" "USER-OVERVIEW"
+"${TMUX_CMD[@]}" select-window -t "owner:overview"
+"${TMUX_CMD[@]}" detach-client -s "owner" 2>/dev/null || true
+
+BASE_WIN=$("${TMUX_CMD[@]}" display-message -p -t "$HOME_SESSION:base" '#{window_id}')
+"${TMUX_CMD[@]}" set-option -g @explode-scope server
+run_toggle "$HOME_SESSION:base"
+wait_for_pane_count "$BASE_WIN" 2 \
+    || { echo "FAIL [stranded prune negative] explode never reached 2 panes" >&2; exit 1; }
+
+if ! "${TMUX_CMD[@]}" list-windows -t "owner" -F '#{window_name}' | grep -Fxq overview; then
+    echo "FAIL [stranded prune negative] user's own 'overview' window was wrongly pruned" >&2
+    exit 1
+fi
+echo "PASS [stranded prune negative] user-owned 'overview' window left alone (no artifact markers)"
+
+run_toggle "$HOME_SESSION:base"
+wait_for_pane_count "$BASE_WIN" 1 \
+    || { echo "FAIL [stranded prune negative teardown] base never reduced to 1 pane" >&2; exit 1; }
+
+"${TMUX_CMD[@]}" set-option -gu @explode-scope

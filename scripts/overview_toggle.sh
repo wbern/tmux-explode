@@ -426,8 +426,54 @@ apply_column_biased_layout() {
     fi
 }
 
+# Drop a stranded overview window in the target session before our nested
+# attach inherits its active-window pointer. Without this, a previous
+# session-scope explode that crashed before teardown leaves an `overview`
+# window sitting as the session's active window — and our `tmux attach -t
+# <name>` then renders THAT window in our tile, double-nesting whatever
+# the dead wall was attached to. Result: tile labelled "co-crew-jon"
+# silently shows "avc-crew-andrej"'s content.
+#
+# Only fires when ALL of:
+#   - target's active window is named like our @explode-window-name,
+#   - it carries our @orig_session/@orig_window pane markers (so it's our
+#     artifact, not a window the user happened to name "overview"),
+#   - no client is currently attached to the target session (so we can't
+#     yank a window out from under a real viewer who's mid-wall).
+prune_stranded_overview() {
+    local name="$1"
+
+    local active_wid active_wname
+    read -r active_wid active_wname < <(
+        tmux display-message -p -t "$name" '#{window_id} #{window_name}' 2>/dev/null
+    ) || return 0
+    [[ -z "${active_wid:-}" || "$active_wname" != "$OVERVIEW" ]] && return 0
+
+    local has_artifacts
+    has_artifacts=$(tmux list-panes -t "$active_wid" \
+                    -F '#{@orig_session}#{@orig_window}' 2>/dev/null \
+                    | grep -v '^$' | head -1 || true)
+    [[ -z "$has_artifacts" ]] && return 0
+
+    local any_client
+    any_client=$(tmux list-clients -t "$name" -F '#{client_name}' 2>/dev/null \
+                 | head -1 || true)
+    [[ -n "$any_client" ]] && return 0
+
+    local fallback_wid
+    fallback_wid=$(tmux list-windows -t "$name" \
+                   -F '#{window_id} #{window_name}' 2>/dev/null \
+                   | awk -v ov="$OVERVIEW" '$2!=ov {print $1; exit}')
+    if [[ -n "$fallback_wid" ]]; then
+        tmux select-window -t "$fallback_wid" 2>/dev/null || true
+    fi
+    tmux kill-window -t "$active_wid" 2>/dev/null || true
+}
+
 add_session_attach_pane() {
     local name="$1"
+
+    prune_stranded_overview "$name"
 
     # Snapshot the target session's status setting so we can restore it
     # on unexplode. show-options without -g returns ONLY session-local
