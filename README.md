@@ -122,9 +122,9 @@ set -g @explode-window-name 'glance'
   counts). The pre-build sweep dismantles strangers cleanly: inner
   attaches killed, gathered panes returned to their origins, border
   options restored, dedicated overview windows removed.
-- Automated visual snapshot tests run in CI on `ubuntu-latest`; also tested
-  manually on tmux 3.6a (the version that ships via Homebrew on recent
-  macOS).
+- Automated visual snapshot tests run in CI against tmux **3.3a, 3.4,
+  3.5a, and 3.6a** (covers Debian 12, Ubuntu 24.04 LTS, and current
+  upstream); the same suite is run manually on macOS Homebrew tmux 3.6a.
 
 ### In-place wall notes (`all` and `server` scopes)
 
