@@ -1449,15 +1449,27 @@ echo "PASS [window-size inherit] inherited window-size returns to inheriting on 
 "${TMUX_CMD[@]}" set-option -gu @explode-scope
 
 # ---------------------------------------------------------------------------
-# Scenario 18: dim-style cleanup race — anchor pane must NOT carry the
+# Scenario 18: dim-style cleanup — anchor pane must NOT carry the
 # heatmap's cool/cold bg after unexplode.
 #
-# Repro: pre-stamp the anchor pane with a @pane_last_change far in the
-# past so the poller's first tick decides the bucket is ❄ and applies
-# bg=#10102a via `select-pane -P`. Without the fix, unexplode_inplace's
-# per-pane wipe ran BEFORE stop_heatmap_poller, so the still-running
-# poller could re-apply the style on its next tick — leaving the user
-# with a dark-blue anchor pane after toggle-off.
+# Repro: pre-stamp the anchor with @pane_last_change far in the past so
+# the poller decides ❄ and applies bg=#10102a via `select-pane -P`. Pin
+# the tick to 50ms via @explode-heat-tick so the poller has actually
+# applied a style by the time we toggle off (vs. the 2s default, where
+# the wall could come and go before any tick). Run 5 cycles to give
+# more chances for any cleanup-vs-tick race to surface.
+#
+# CAVEAT: the original SIGTERM-async race that motivated the
+# wait-for-poller-exit fix in stop_heatmap_poller is hard to reproduce
+# deterministically — tmux serializes commands per-socket and bash
+# handles SIGTERM between statements, so the poller almost always dies
+# before its next select-pane. This scenario is a STRUCTURAL assertion
+# (anchor ends with default style after the round-trip) plus a smoke
+# test that the cleanup path doesn't break under stress; it does not
+# guarantee the timing race itself would always trigger without the
+# fix. The fix remains correct on reasoning grounds — async signals
+# can't be assumed instant — and this test guards the symptom, not
+# the precise mechanism.
 # ---------------------------------------------------------------------------
 cleanup
 "${TMUX_CMD[@]}" new-session -d -s "$HOME_SESSION" -n base -x 120 -y 40
@@ -1470,45 +1482,57 @@ wait_for_markers "dimsib" 1
 BASE_WIN=$("${TMUX_CMD[@]}" display-message -p -t "$HOME_SESSION:base" '#{window_id}')
 ANCHOR_PANE=$("${TMUX_CMD[@]}" list-panes -t "$BASE_WIN" -F '#{pane_id}' | head -1)
 
-# Pre-stamp last_change to 200s ago — past the 120s ❄ threshold.
-NOW_TS=$(date +%s)
-"${TMUX_CMD[@]}" set-option -p -t "$ANCHOR_PANE" "@pane_last_change" "$((NOW_TS - 200))"
-
 "${TMUX_CMD[@]}" set-option -g @explode-scope server
-run_toggle "$HOME_SESSION:base"
-wait_for_pane_count "$BASE_WIN" 2 \
-    || { echo "FAIL [dim-cleanup] explode never reached 2 panes" >&2; exit 1; }
+"${TMUX_CMD[@]}" set-option -g @explode-heat-tick 0.05
 
-# Wait up to 6s for the poller to apply the cold bg.
-saw_dim=""
-for _ in 1 2 3 4 5 6; do
-    style=$("${TMUX_CMD[@]}" show-options -pqv -t "$ANCHOR_PANE" "window-style")
-    if [[ "$style" == bg=* ]]; then
-        saw_dim="$style"
-        break
-    fi
-    sleep 1
-done
-if [[ -z "$saw_dim" ]]; then
-    echo "FAIL [dim-cleanup] poller never applied a bg style to the anchor (got '$style')" >&2
-    exit 1
-fi
+DIM_CYCLES=5
+for cycle in $(seq 1 $DIM_CYCLES); do
+    # Re-stamp last_change ahead of EACH cycle — unexplode_inplace
+    # preserves @pane_last_change (so re-explode reflects elapsed time),
+    # but the cycle-1 stamp may have aged past the bucket boundaries we
+    # want to test by cycle N. Pin it to "200s ago" every iteration so
+    # the poller's first tick reliably picks ❄.
+    NOW_TS=$(date +%s)
+    "${TMUX_CMD[@]}" set-option -p -t "$ANCHOR_PANE" "@pane_last_change" "$((NOW_TS - 200))"
 
-run_toggle "$HOME_SESSION:base"
-wait_for_pane_count "$BASE_WIN" 1 \
-    || { echo "FAIL [dim-cleanup] unexplode never reduced to 1 pane" >&2; exit 1; }
+    run_toggle "$HOME_SESSION:base"
+    wait_for_pane_count "$BASE_WIN" 2 \
+        || { echo "FAIL [dim-cleanup] cycle $cycle explode never reached 2 panes" >&2; exit 1; }
 
-# Give any racing poller tick a generous beat to misbehave.
-sleep 3
-
-POST_STYLE=$("${TMUX_CMD[@]}" show-options -pqv -t "$ANCHOR_PANE" "window-style")
-POST_ASTYLE=$("${TMUX_CMD[@]}" show-options -pqv -t "$ANCHOR_PANE" "window-active-style")
-for s in "$POST_STYLE" "$POST_ASTYLE"; do
-    if [[ -n "$s" && "$s" != "default" ]]; then
-        echo "FAIL [dim-cleanup] anchor pane retains bg style after unexplode: '$s'" >&2
+    # 50ms tick + 1s ceiling = at least ~15 ticks before we proceed, so
+    # the poller has applied the cold bg with very high probability.
+    saw_dim=""
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        style=$("${TMUX_CMD[@]}" show-options -pqv -t "$ANCHOR_PANE" "window-style")
+        if [[ "$style" == bg=* ]]; then
+            saw_dim="$style"
+            break
+        fi
+        sleep 0.1
+    done
+    if [[ -z "$saw_dim" ]]; then
+        echo "FAIL [dim-cleanup] cycle $cycle: poller never applied a bg style to the anchor" >&2
         exit 1
     fi
+
+    run_toggle "$HOME_SESSION:base"
+    wait_for_pane_count "$BASE_WIN" 1 \
+        || { echo "FAIL [dim-cleanup] cycle $cycle unexplode never reduced to 1 pane" >&2; exit 1; }
+
+    # Give a few extra ticks of the (now-supposedly-dead) poller a chance
+    # to misbehave if the wait-for-exit fix isn't doing its job.
+    sleep 0.5
+
+    POST_STYLE=$("${TMUX_CMD[@]}" show-options -pqv -t "$ANCHOR_PANE" "window-style")
+    POST_ASTYLE=$("${TMUX_CMD[@]}" show-options -pqv -t "$ANCHOR_PANE" "window-active-style")
+    for s in "$POST_STYLE" "$POST_ASTYLE"; do
+        if [[ -n "$s" && "$s" != "default" ]]; then
+            echo "FAIL [dim-cleanup] cycle $cycle: anchor retains bg after unexplode: '$s'" >&2
+            exit 1
+        fi
+    done
 done
-echo "PASS [dim-cleanup] anchor pane bg cleared after unexplode (was '$saw_dim' during)"
+echo "PASS [dim-cleanup] $DIM_CYCLES toggle cycles, anchor stayed default after each (50ms tick stress)"
 
 "${TMUX_CMD[@]}" set-option -gu @explode-scope
+"${TMUX_CMD[@]}" set-option -gu @explode-heat-tick

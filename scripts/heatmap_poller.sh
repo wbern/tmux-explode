@@ -18,7 +18,10 @@ set -u
 
 SOCKET="${1:?socket path required}"
 WIN_ID="${2:?window id required}"
-TICK="${3:-2}"
+# Tick precedence: positional arg > EXPLODE_HEAT_TICK env > 2s default.
+# The env override exists so tests can stress the cleanup-vs-tick race
+# with a sub-second tick without exposing a user-facing option.
+TICK="${3:-${EXPLODE_HEAT_TICK:-2}}"
 
 # Cool/cold panes get a faint navy bg so the user's eye can register
 # "this one's parked" without the tile screaming for attention. Two

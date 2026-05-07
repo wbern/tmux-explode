@@ -331,10 +331,13 @@ start_heatmap_poller() {
     # Per-tier dim styles are passed via env so we don't bloat the poller's
     # positional arg list every time we add a knob. Read fresh on each
     # toggle so option changes take effect without re-sourcing tmux.conf.
-    local dim_cold style_cool style_cold
+    local dim_cold style_cool style_cold tick
     dim_cold=$(get_tmux_option "@explode-dim-cold" "on")
     style_cool=$(get_tmux_option "@explode-style-cool" "bg=#0a0a18")
     style_cold=$(get_tmux_option "@explode-style-cold" "bg=#10102a")
+    # Undocumented escape hatch — tests pin a tiny tick to deterministically
+    # exercise the cleanup-vs-poller race. End users never need to touch it.
+    tick=$(get_tmux_option "@explode-heat-tick" "2")
 
     # nohup + full redirection lets the poller outlive the run-shell
     # invocation that fired this script. disown makes sure bash isn't
@@ -342,10 +345,30 @@ start_heatmap_poller() {
     EXPLODE_DIM_COLD="$dim_cold" \
         EXPLODE_STYLE_COOL="$style_cool" \
         EXPLODE_STYLE_COLD="$style_cold" \
-        nohup bash "$poller" "$SOCKET_PATH" "$CURRENT_WIN" </dev/null >/dev/null 2>&1 &
+        nohup bash "$poller" "$SOCKET_PATH" "$CURRENT_WIN" "$tick" </dev/null >/dev/null 2>&1 &
     local pid=$!
     disown 2>/dev/null || true
     tmux set-option -w -t "$CURRENT_WIN" "@explode_heat_pid" "$pid"
+}
+
+# Send SIGTERM and wait for $1 to actually exit. SIGTERM is async —
+# without waiting, callers can race a poller's final tick (re-applying
+# a `bg=#…` style after we've cleared it). Polls `kill -0` in 100ms
+# bursts up to ~1s, then SIGKILLs as a backstop so a wedged process
+# can't deadlock teardown.
+kill_and_wait() {
+    local pid="$1" n
+    [[ -z "$pid" ]] && return 0
+    kill "$pid" 2>/dev/null || true
+    for n in 1 2 3 4 5 6 7 8 9 10; do
+        kill -0 "$pid" 2>/dev/null || return 0
+        sleep 0.1
+    done
+    kill -9 "$pid" 2>/dev/null || true
+    for n in 1 2 3 4 5; do
+        kill -0 "$pid" 2>/dev/null || return 0
+        sleep 0.1
+    done
 }
 
 # Stop the poller and wipe per-pane heat markers so panes that get
@@ -354,28 +377,7 @@ start_heatmap_poller() {
 stop_heatmap_poller() {
     local pid
     pid=$(tmux show-options -wqv -t "$CURRENT_WIN" "@explode_heat_pid" 2>/dev/null || true)
-    if [[ -n "$pid" ]]; then
-        kill "$pid" 2>/dev/null || true
-        # WAIT for the poller to actually exit before we touch pane
-        # styles. SIGTERM is async — without this wait, the poller can
-        # still finish a tick AFTER our belt-and-braces `select-pane -P
-        # default` below, re-applying a `bg=#…` cool/cold style and
-        # leaving the user with a stained pane after toggle-off. Poll
-        # `kill -0` in short bursts up to ~1s; then SIGKILL as a backstop
-        # so a wedged poller can't deadlock teardown.
-        local n
-        for n in 1 2 3 4 5 6 7 8 9 10; do
-            kill -0 "$pid" 2>/dev/null || break
-            sleep 0.1
-        done
-        if kill -0 "$pid" 2>/dev/null; then
-            kill -9 "$pid" 2>/dev/null || true
-            for n in 1 2 3 4 5; do
-                kill -0 "$pid" 2>/dev/null || break
-                sleep 0.1
-            done
-        fi
-    fi
+    kill_and_wait "$pid"
     tmux set-option -w -u -t "$CURRENT_WIN" "@explode_heat_pid" 2>/dev/null || true
 
     # Belt-and-braces wipe of the EPHEMERAL markers on every pane still in
@@ -577,25 +579,10 @@ teardown_inplace_wall() {
     local wid="$1" sess="$2"
 
     # Stop the poller FIRST so a final tick can't race with our pane
-    # marker wipes. Wait for the process to actually exit (SIGTERM is
-    # async — see stop_heatmap_poller for the full reasoning) before
-    # touching any pane styles.
-    local pid n
+    # marker wipes. See kill_and_wait for why we wait on exit.
+    local pid
     pid=$(tmux show-options -wqv -t "$wid" "@explode_heat_pid" 2>/dev/null || true)
-    if [[ -n "$pid" ]]; then
-        kill "$pid" 2>/dev/null || true
-        for n in 1 2 3 4 5 6 7 8 9 10; do
-            kill -0 "$pid" 2>/dev/null || break
-            sleep 0.1
-        done
-        if kill -0 "$pid" 2>/dev/null; then
-            kill -9 "$pid" 2>/dev/null || true
-            for n in 1 2 3 4 5; do
-                kill -0 "$pid" 2>/dev/null || break
-                sleep 0.1
-            done
-        fi
-    fi
+    kill_and_wait "$pid"
     tmux set-option -w -u -t "$wid" "@explode_heat_pid" 2>/dev/null || true
 
     local live_windows

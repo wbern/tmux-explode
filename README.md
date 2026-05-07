@@ -108,6 +108,15 @@ set -g @explode-window-name 'glance'
 - If a window with the configured overview name already exists, explode is a
   no-op and shows a status-line message — rename the existing window or pick a
   different `@explode-window-name`.
+- **One wall server-wide** (applies to all scopes): toggling on tears
+  down any other wall already up — in any session, whether `all`,
+  `server`, or `session` scope — before building the new one. Two
+  simultaneous walls used to interact badly (wall A would attach into
+  B's session and create a nested-attach pane carrying A's overview,
+  which B's explode would then re-tile into a confusing soup of pane
+  counts). The pre-build sweep dismantles strangers cleanly: inner
+  attaches killed, gathered panes returned to their origins, border
+  options restored, dedicated overview windows removed.
 - Automated visual snapshot tests run in CI on `ubuntu-latest`; also tested
   manually on tmux 3.6a (the version that ships via Homebrew on recent
   macOS).
@@ -119,14 +128,6 @@ set -g @explode-window-name 'glance'
   attaches are added alongside it. Toggling off restores everything — no
   extra tab to navigate, and a single-window session can never be
   collapsed by the toggle.
-- **One wall server-wide**: toggling on tears down any other wall already
-  up (in any session, in-place or session-scope) before building the
-  new one. Two simultaneous walls used to interact badly — wall A would
-  attach into B's session and create a nested-attach pane carrying A's
-  overview, which B's explode would then re-tile into a confusing soup
-  of pane counts. The pre-build sweep dismantles strangers cleanly:
-  inner attaches killed, gathered panes returned to their origins,
-  border options restored.
 - Each tile gets a labelled border (`pane-border-status top`) so you can
   tell at a glance what's where. The label text is colored, not the
   border line itself: a yellow `◉ here` for the anchor pane, a cyan
