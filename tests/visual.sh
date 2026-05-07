@@ -52,7 +52,17 @@ wait_for_markers() {
         (( found >= expected )) && return 0
         sleep 0.1
     done
-    echo "FAIL: markers never rendered (saw $found/$expected)" >&2
+    echo "FAIL: markers never rendered (saw $found/$expected) in session=$session" >&2
+    echo "--- panes in session ---" >&2
+    "${TMUX_CMD[@]}" list-panes -s -t "$session" \
+        -F '#{pane_id} #{pane_pid} #{pane_current_command} #{pane_width}x#{pane_height}' >&2 || true
+    echo "--- pane contents ---" >&2
+    "${TMUX_CMD[@]}" list-panes -s -t "$session" -F '#{pane_id}' | while read -r p; do
+        echo "[ $p ]" >&2
+        "${TMUX_CMD[@]}" capture-pane -p -t "$p" >&2 || true
+    done
+    echo "--- env (smoke) ---" >&2
+    echo "TERM=${TERM-<unset>} SHELL=${SHELL-<unset>} TMUX=${TMUX-<unset>}" >&2
     return 1
 }
 
