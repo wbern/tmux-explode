@@ -858,7 +858,7 @@ if kill -0 "$HEAT_PID" 2>/dev/null; then
 fi
 
 ANCHOR_PANE=$("${TMUX_CMD[@]}" list-panes -t "$BASE_WIN" -F '#{pane_id}' | head -1)
-for opt in "@heat" "@pane_last_hash" "@pane_last_change" "@pane_first_sight"; do
+for opt in "@heat" "@heat_style" "@pane_last_hash" "@pane_last_change" "@pane_first_sight" "pane-style"; do
     leaked=$("${TMUX_CMD[@]}" show-options -pqv -t "$ANCHOR_PANE" "$opt")
     if [[ -n "$leaked" ]]; then
         echo "FAIL [heatmap teardown] $opt leaked on anchor pane: '$leaked'" >&2

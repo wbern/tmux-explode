@@ -316,10 +316,21 @@ start_heatmap_poller() {
     poller="$(dirname "${BASH_SOURCE[0]}")/heatmap_poller.sh"
     [[ -x "$poller" ]] || return 0
 
+    # Per-tier dim styles are passed via env so we don't bloat the poller's
+    # positional arg list every time we add a knob. Read fresh on each
+    # toggle so option changes take effect without re-sourcing tmux.conf.
+    local dim_cold style_cool style_cold
+    dim_cold=$(get_tmux_option "@explode-dim-cold" "on")
+    style_cool=$(get_tmux_option "@explode-style-cool" "fg=colour244")
+    style_cold=$(get_tmux_option "@explode-style-cold" "fg=colour240")
+
     # nohup + full redirection lets the poller outlive the run-shell
     # invocation that fired this script. disown makes sure bash isn't
     # tracking it as a job we'd block on.
-    nohup bash "$poller" "$SOCKET_PATH" "$CURRENT_WIN" </dev/null >/dev/null 2>&1 &
+    EXPLODE_DIM_COLD="$dim_cold" \
+        EXPLODE_STYLE_COOL="$style_cool" \
+        EXPLODE_STYLE_COLD="$style_cold" \
+        nohup bash "$poller" "$SOCKET_PATH" "$CURRENT_WIN" </dev/null >/dev/null 2>&1 &
     local pid=$!
     disown 2>/dev/null || true
     tmux set-option -w -t "$CURRENT_WIN" "@explode_heat_pid" "$pid"
@@ -343,6 +354,8 @@ stop_heatmap_poller() {
         tmux set-option -p -u -t "$pane_id" "@pane_last_change" 2>/dev/null || true
         tmux set-option -p -u -t "$pane_id" "@pane_first_sight" 2>/dev/null || true
         tmux set-option -p -u -t "$pane_id" "@heat" 2>/dev/null || true
+        tmux set-option -p -u -t "$pane_id" "@heat_style" 2>/dev/null || true
+        tmux set-option -p -u -t "$pane_id" pane-style 2>/dev/null || true
     done < <(tmux list-panes -t "$CURRENT_WIN" -F '#{pane_id}' 2>/dev/null || true)
 }
 

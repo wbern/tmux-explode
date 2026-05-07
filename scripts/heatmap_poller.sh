@@ -20,6 +20,16 @@ SOCKET="${1:?socket path required}"
 WIN_ID="${2:?window id required}"
 TICK="${3:-2}"
 
+# Cool/cold panes get their default fg/bg dimmed via pane-style so the
+# user's eye can skip over quiet tiles without scanning. Apps that emit
+# explicit ANSI colors override these defaults — the dim only "shows
+# through" on uncolored cells — but it's enough of a visual cue on most
+# content. Set EXPLODE_DIM_COLD=off to disable, or override the per-tier
+# styles via EXPLODE_STYLE_COOL / EXPLODE_STYLE_COLD.
+DIM_COLD="${EXPLODE_DIM_COLD:-on}"
+STYLE_COOL="${EXPLODE_STYLE_COOL:-fg=colour244}"
+STYLE_COLD="${EXPLODE_STYLE_COLD:-fg=colour240}"
+
 T() { tmux -S "$SOCKET" "$@"; }
 
 # Strip CSI (`ESC [ ... letter`), OSC (`ESC ] ... BEL/ST`), and a couple of
@@ -72,12 +82,13 @@ while :; do
             last_change=$now
         fi
 
+        style=""
         if [[ -n "$last_change" ]]; then
             age=$(( now - last_change ))
             if   (( age < 5 ));   then glyph='🔥'
             elif (( age < 30 ));  then glyph='🌶'
-            elif (( age < 120 )); then glyph='💤'
-            else                       glyph='❄'
+            elif (( age < 120 )); then glyph='💤'; style="$STYLE_COOL"
+            else                       glyph='❄';  style="$STYLE_COLD"
             fi
         else
             # No activity has ever been observed on this pane. Show neutral
@@ -86,12 +97,26 @@ while :; do
             [[ -z "$first_sight" ]] && first_sight=$now
             wait=$(( now - first_sight ))
             if   (( wait < 120 )); then glyph='⚪'
-            elif (( wait < 240 )); then glyph='💤'
-            else                        glyph='❄'
+            elif (( wait < 240 )); then glyph='💤'; style="$STYLE_COOL"
+            else                        glyph='❄';  style="$STYLE_COLD"
             fi
         fi
+        [[ "$DIM_COLD" == "off" ]] && style=""
 
         T set-option -p -t "$pane_id" "@heat" "$glyph" 2>/dev/null || true
+
+        # Only re-issue pane-style when the desired style changes — every
+        # set-option on pane-style triggers a redraw, and panes that sit
+        # on the same bucket for many ticks shouldn't flicker.
+        prev_style=$(T show-options -pqv -t "$pane_id" "@heat_style" 2>/dev/null) || prev_style=""
+        if [[ "$prev_style" != "$style" ]]; then
+            if [[ -n "$style" ]]; then
+                T set-option -p -t "$pane_id" pane-style "$style" 2>/dev/null || true
+            else
+                T set-option -p -u -t "$pane_id" pane-style 2>/dev/null || true
+            fi
+            T set-option -p -t "$pane_id" "@heat_style" "$style" 2>/dev/null || true
+        fi
     done < <(T list-panes -t "$WIN_ID" -F $'#{pane_id}\t#{pane_in_mode}' 2>/dev/null || true)
 
     # `refresh-client` (no -S): tmux issue #570 — `-S` doesn't redraw
