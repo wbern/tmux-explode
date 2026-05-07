@@ -655,7 +655,7 @@ done
 # format vars (incl. per-pane user options) against the target pane, so we
 # get the actual on-screen label for that tile.
 saw_anchor=0; saw_local=0; saw_remote=0
-while IFS=$'\x1f' read -r pane_id orig_sess orig_win; do
+while IFS='|' read -r pane_id orig_sess orig_win; do
     [[ -z "$pane_id" ]] && continue
     rendered=$("${TMUX_CMD[@]}" display-message -p -t "$pane_id" "$WALL_FORMAT")
     if [[ -n "$orig_sess" ]]; then
@@ -678,7 +678,7 @@ while IFS=$'\x1f' read -r pane_id orig_sess orig_win; do
         saw_anchor=1
     fi
 done < <("${TMUX_CMD[@]}" list-panes -t "$BASE_WIN" \
-         -F $'#{pane_id}\x1f#{@orig_session}\x1f#{@orig_window}')
+         -F '#{pane_id}|#{@orig_session}|#{@orig_window}')
 
 if (( saw_anchor == 0 || saw_local == 0 || saw_remote == 0 )); then
     echo "FAIL [tile labels] missing tier — anchor=$saw_anchor local=$saw_local remote=$saw_remote" >&2
