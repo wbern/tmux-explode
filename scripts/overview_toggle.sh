@@ -574,8 +574,8 @@ teardown_inplace_wall() {
     now_ts=$(date +%s)
 
     local SEP=$'\x1f'
-    local pane_id orig_session saved orig_name orig_id orig_index last_change
-    while IFS="$SEP" read -r pane_id orig_session saved orig_name orig_id orig_index last_change; do
+    local pane_id orig_session saved orig_name orig_id orig_index last_change saved_ws
+    while IFS="$SEP" read -r pane_id orig_session saved orig_name orig_id orig_index last_change saved_ws; do
         [[ -z "$pane_id" ]] && continue
 
         tmux set-option -p -u -t "$pane_id" "@pane_last_hash" 2>/dev/null || true
@@ -594,6 +594,12 @@ teardown_inplace_wall() {
                 tmux set-option -u -t "$orig_session" status 2>/dev/null || true
             elif [[ "${saved:-}" == set:* ]]; then
                 tmux set-option -t "$orig_session" status "${saved#set:}" 2>/dev/null || true
+            fi
+
+            if [[ "${saved_ws:-}" == "unset" ]]; then
+                tmux set-option -u -t "$orig_session" window-size 2>/dev/null || true
+            elif [[ "${saved_ws:-}" == set:* ]]; then
+                tmux set-option -t "$orig_session" window-size "${saved_ws#set:}" 2>/dev/null || true
             fi
 
             tmux kill-pane -t "$pane_id" 2>/dev/null || true
@@ -617,7 +623,7 @@ teardown_inplace_wall() {
             tmux join-pane -s "$pane_id" -t "${first_pane_of_window[$group_key]}" 2>/dev/null || true
         fi
     done < <(tmux list-panes -t "$wid" \
-             -F "#{pane_id}${SEP}#{@orig_session}${SEP}#{@orig_session_status}${SEP}#{@orig_window}${SEP}#{@orig_window_id}${SEP}#{@orig_window_index}${SEP}#{@pane_last_change}" 2>/dev/null)
+             -F "#{pane_id}${SEP}#{@orig_session}${SEP}#{@orig_session_status}${SEP}#{@orig_window}${SEP}#{@orig_window_id}${SEP}#{@orig_window_index}${SEP}#{@pane_last_change}${SEP}#{@orig_session_window_size}" 2>/dev/null)
 
     # Restore window-scoped border options. Both keys: `set:VALUE` means
     # the user had it pinned to VALUE before we touched it; `unset` means
@@ -801,6 +807,26 @@ add_session_attach_pane() {
     fi
     tmux set-option -t "$name" status off
 
+    # Snapshot the inner session's window-size and force `smallest` while
+    # the wall is up. Default `latest` sizes inner windows to the most
+    # recently active client — usually the user's main client (e.g.
+    # 214x78), not the small wall tile (e.g. 42x38). Result: the inner
+    # TUI keeps painting at the big size, but the tile only shows the
+    # top-left slice; new output appears off-screen ("moves but not at
+    # the bottom"). `smallest` reflows the inner window to the tile's
+    # actual dimensions so streaming output stays visible. Round-trip
+    # via the same set:VALUE / unset marker pattern as `status`.
+    local saved_ws ws_line
+    saved_ws=""
+    ws_line=$(tmux show-options -t "$name" window-size 2>/dev/null || true)
+    if [[ -n "$ws_line" ]]; then
+        saved_ws=${ws_line#window-size }
+        saved_ws="set:$saved_ws"
+    else
+        saved_ws="unset"
+    fi
+    tmux set-option -t "$name" window-size smallest 2>/dev/null || true
+
     # printf %q quotes session names (and the socket path) safely for the
     # shell that tmux spawns under the new pane. The leading `unset TMUX`
     # is what lets tmux nest — split-window's `-e TMUX` flag is unreliable
@@ -818,6 +844,7 @@ add_session_attach_pane() {
 
     tmux set-option -p -t "$new_pane" "@orig_session" "$name"
     tmux set-option -p -t "$new_pane" "@orig_session_status" "$saved"
+    tmux set-option -p -t "$new_pane" "@orig_session_window_size" "$saved_ws"
 
     # Stamp the validated saved timestamp on the new pane so the heatmap
     # poller picks up the prior bucket on its first tick. No-op when the
@@ -945,13 +972,13 @@ unexplode_inplace() {
     local SEP=$'\x1f'
     local panes_data
     panes_data=$(tmux list-panes -t "$CURRENT_WIN" \
-                 -F "#{pane_id}${SEP}#{@orig_session}${SEP}#{@orig_session_status}${SEP}#{@orig_window}${SEP}#{@orig_window_id}${SEP}#{@orig_window_index}${SEP}#{@pane_last_change}")
+                 -F "#{pane_id}${SEP}#{@orig_session}${SEP}#{@orig_session_status}${SEP}#{@orig_window}${SEP}#{@orig_window_id}${SEP}#{@orig_window_index}${SEP}#{@pane_last_change}${SEP}#{@orig_session_window_size}")
 
     local now_ts
     now_ts=$(date +%s)
 
-    local pane_id orig_session saved orig_name orig_id orig_index last_change
-    while IFS="$SEP" read -r pane_id orig_session saved orig_name orig_id orig_index last_change; do
+    local pane_id orig_session saved orig_name orig_id orig_index last_change saved_ws
+    while IFS="$SEP" read -r pane_id orig_session saved orig_name orig_id orig_index last_change saved_ws; do
         # Wipe ephemeral wall markers before any pane-moving action so they
         # don't follow a local pane back to its origin window. We deliberately
         # KEEP @pane_last_change and @pane_first_sight — those drive the
@@ -983,6 +1010,13 @@ unexplode_inplace() {
                 tmux set-option -u -t "$orig_session" status 2>/dev/null || true
             elif [[ "${saved:-}" == set:* ]]; then
                 tmux set-option -t "$orig_session" status "${saved#set:}" 2>/dev/null || true
+            fi
+
+            # Restore window-size (forced to `smallest` while the wall was up).
+            if [[ "${saved_ws:-}" == "unset" ]]; then
+                tmux set-option -u -t "$orig_session" window-size 2>/dev/null || true
+            elif [[ "${saved_ws:-}" == set:* ]]; then
+                tmux set-option -t "$orig_session" window-size "${saved_ws#set:}" 2>/dev/null || true
             fi
 
             # Killing the pane terminates its `tmux attach` process, dropping

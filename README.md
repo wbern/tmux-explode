@@ -148,6 +148,12 @@ set -g @explode-window-name 'glance'
 - Inner sessions get their `status` option set to `off` while the wall is
   active so status bars don't stack inside each pane. The previous value is
   restored on toggle-off.
+- Inner sessions also get `window-size` set to `smallest` while the wall is
+  up. tmux's default `latest` sizes a window to the most recently active
+  client — usually your main view, not the small wall tile. Without this,
+  TUIs paint at the main view's size and new output falls below the visible
+  tile region (panes look "frozen" until you click into them). The previous
+  value is restored on toggle-off.
 - Each tile's border label is prefixed with an activity heatmap glyph
   driven by a small background poller (~2s tick) that records the
   timestamp of each tile's last visible-buffer change. Once a real change

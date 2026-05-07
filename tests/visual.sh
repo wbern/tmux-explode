@@ -1341,3 +1341,95 @@ wait_for_pane_count "$BETA_WIN" 1 \
 echo "PASS [single-wall] toggling in B tears down A's wall before building B's"
 
 "${TMUX_CMD[@]}" set-option -gu @explode-scope
+
+# ---------------------------------------------------------------------------
+# Scenario 17: window-size round-trip on nested-attach inner sessions.
+#
+# Default `window-size latest` sizes inner windows to the most recently
+# active client — usually the user's main client, not the small wall tile
+# they're being viewed in. Inner TUIs paint at the wrong size; new output
+# falls below the visible tile region. add_session_attach_pane forces
+# `window-size smallest` for the duration of the wall and restores the
+# prior value on unexplode (set:VALUE for an explicit override, unset to
+# drop a session-local override and re-inherit the global default).
+# ---------------------------------------------------------------------------
+cleanup
+"${TMUX_CMD[@]}" new-session -d -s "$HOME_SESSION" -n base -x 120 -y 40
+label_pane "$HOME_SESSION:base.0" "HOME"
+"${TMUX_CMD[@]}" new-session -d -s "wsib" -n w -x 120 -y 40
+label_pane "wsib:w.0" "WSIB"
+wait_for_markers "$HOME_SESSION" 1
+wait_for_markers "wsib" 1
+
+BASE_WIN=$("${TMUX_CMD[@]}" display-message -p -t "$HOME_SESSION:base" '#{window_id}')
+
+# Pin sibling to an explicit non-default value so the round-trip restore
+# has something to verify (and is distinguishable from the wall's forced
+# `smallest`).
+"${TMUX_CMD[@]}" set-option -t wsib window-size largest
+PRE_WS=$("${TMUX_CMD[@]}" show-options -t wsib -v window-size)
+if [[ "$PRE_WS" != "largest" ]]; then
+    echo "FAIL [window-size restore] precondition: expected largest, got '$PRE_WS'" >&2
+    exit 1
+fi
+
+"${TMUX_CMD[@]}" set-option -g @explode-scope server
+run_toggle "$HOME_SESSION:base"
+wait_for_pane_count "$BASE_WIN" 2 \
+    || { echo "FAIL [window-size restore] explode never reached 2 panes" >&2; exit 1; }
+
+DURING_WS=$("${TMUX_CMD[@]}" show-options -t wsib -v window-size)
+if [[ "$DURING_WS" != "smallest" ]]; then
+    echo "FAIL [window-size restore] expected window-size=smallest during wall, got '$DURING_WS'" >&2
+    exit 1
+fi
+
+run_toggle "$HOME_SESSION:base"
+wait_for_pane_count "$BASE_WIN" 1 \
+    || { echo "FAIL [window-size restore] unexplode never reduced to 1 pane" >&2; exit 1; }
+
+POST_WS=$("${TMUX_CMD[@]}" show-options -t wsib -v window-size)
+if [[ "$POST_WS" != "$PRE_WS" ]]; then
+    echo "FAIL [window-size restore] sibling window-size not restored" >&2
+    echo "--- before: $PRE_WS" >&2
+    echo "--- after:  $POST_WS" >&2
+    exit 1
+fi
+echo "PASS [window-size restore] explicit window-size round-trips through explode"
+
+# Second leg: a session inheriting the global default (no session-local
+# override) must come back inheriting the default — set:value would pin
+# the sibling to a value that wasn't its before.
+cleanup
+"${TMUX_CMD[@]}" new-session -d -s "$HOME_SESSION" -n base -x 120 -y 40
+label_pane "$HOME_SESSION:base.0" "HOME"
+"${TMUX_CMD[@]}" new-session -d -s "wsib2" -n w -x 120 -y 40
+label_pane "wsib2:w.0" "WSIB2"
+wait_for_markers "$HOME_SESSION" 1
+wait_for_markers "wsib2" 1
+
+BASE_WIN=$("${TMUX_CMD[@]}" display-message -p -t "$HOME_SESSION:base" '#{window_id}')
+
+PRE_WS_INHERIT=$("${TMUX_CMD[@]}" show-options -t wsib2 window-size 2>/dev/null || true)
+if [[ -n "$PRE_WS_INHERIT" ]]; then
+    echo "FAIL [window-size inherit] precondition: expected no session-local override, got '$PRE_WS_INHERIT'" >&2
+    exit 1
+fi
+
+"${TMUX_CMD[@]}" set-option -g @explode-scope server
+run_toggle "$HOME_SESSION:base"
+wait_for_pane_count "$BASE_WIN" 2 \
+    || { echo "FAIL [window-size inherit] explode never reached 2 panes" >&2; exit 1; }
+
+run_toggle "$HOME_SESSION:base"
+wait_for_pane_count "$BASE_WIN" 1 \
+    || { echo "FAIL [window-size inherit] unexplode never reduced to 1 pane" >&2; exit 1; }
+
+POST_WS_INHERIT=$("${TMUX_CMD[@]}" show-options -t wsib2 window-size 2>/dev/null || true)
+if [[ -n "$POST_WS_INHERIT" ]]; then
+    echo "FAIL [window-size inherit] session-local override pinned after toggle: '$POST_WS_INHERIT'" >&2
+    exit 1
+fi
+echo "PASS [window-size inherit] inherited window-size returns to inheriting on unexplode"
+
+"${TMUX_CMD[@]}" set-option -gu @explode-scope
