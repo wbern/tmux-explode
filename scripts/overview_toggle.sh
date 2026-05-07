@@ -341,6 +341,7 @@ stop_heatmap_poller() {
         [[ -z "$pane_id" ]] && continue
         tmux set-option -p -u -t "$pane_id" "@pane_last_hash" 2>/dev/null || true
         tmux set-option -p -u -t "$pane_id" "@pane_last_change" 2>/dev/null || true
+        tmux set-option -p -u -t "$pane_id" "@pane_first_sight" 2>/dev/null || true
         tmux set-option -p -u -t "$pane_id" "@heat" 2>/dev/null || true
     done < <(tmux list-panes -t "$CURRENT_WIN" -F '#{pane_id}' 2>/dev/null || true)
 }

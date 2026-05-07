@@ -53,24 +53,42 @@ while :; do
 
         last_hash=$(T show-options -pqv -t "$pane_id" "@pane_last_hash" 2>/dev/null) || last_hash=""
         last_change=$(T show-options -pqv -t "$pane_id" "@pane_last_change" 2>/dev/null) || last_change=""
+        first_sight=$(T show-options -pqv -t "$pane_id" "@pane_first_sight" 2>/dev/null) || first_sight=""
 
-        if [[ "$hash" != "$last_hash" ]]; then
+        if [[ -z "$last_hash" ]]; then
+            # First sight of this pane. Record the hash as a BASELINE only —
+            # we have no prior state to compare against, so we can't honestly
+            # claim activity. last_change stays unset; the glyph branch
+            # below renders the "unknown" state until either a real diff
+            # arrives or enough time elapses to confidently call this idle.
+            T set-option -p -t "$pane_id" "@pane_last_hash" "$hash" 2>/dev/null || true
+            if [[ -z "$first_sight" ]]; then
+                T set-option -p -t "$pane_id" "@pane_first_sight" "$now" 2>/dev/null || true
+                first_sight=$now
+            fi
+        elif [[ "$hash" != "$last_hash" ]]; then
             T set-option -p -t "$pane_id" "@pane_last_hash" "$hash" 2>/dev/null || true
             T set-option -p -t "$pane_id" "@pane_last_change" "$now" 2>/dev/null || true
             last_change=$now
         fi
 
-        # First-tick fallback: a pane added between this tick and the last
-        # has no recorded @pane_last_change (the hash branch above only sets
-        # it when the hash CHANGES, which is true on first sight, but a
-        # racing add could land here). Treat sight-now as last_change.
-        [[ -z "$last_change" ]] && last_change=$now
-
-        age=$(( now - last_change ))
-        if   (( age < 5 ));   then glyph='🔥'
-        elif (( age < 30 ));  then glyph='🌶'
-        elif (( age < 120 )); then glyph='💤'
-        else                       glyph='❄'
+        if [[ -n "$last_change" ]]; then
+            age=$(( now - last_change ))
+            if   (( age < 5 ));   then glyph='🔥'
+            elif (( age < 30 ));  then glyph='🌶'
+            elif (( age < 120 )); then glyph='💤'
+            else                       glyph='❄'
+            fi
+        else
+            # No activity has ever been observed on this pane. Show neutral
+            # while we wait, then fall through to the cool/cold buckets so a
+            # genuinely idle pane doesn't sit on ⚪ forever.
+            [[ -z "$first_sight" ]] && first_sight=$now
+            wait=$(( now - first_sight ))
+            if   (( wait < 120 )); then glyph='⚪'
+            elif (( wait < 240 )); then glyph='💤'
+            else                        glyph='❄'
+            fi
         fi
 
         T set-option -p -t "$pane_id" "@heat" "$glyph" 2>/dev/null || true

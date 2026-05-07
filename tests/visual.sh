@@ -791,7 +791,9 @@ if [[ -z "$HEAT_PID" ]] || ! kill -0 "$HEAT_PID" 2>/dev/null; then
 fi
 
 # Poller ticks every ~2s; give it up to 6s to set @heat on at least one
-# pane. Tighter than that flakes on slow CI runners.
+# pane. Quiet test panes (no output between ticks) should land on ⚪
+# (neutral — no observed activity yet), not 🔥. Tighter than 6s flakes
+# on slow CI runners.
 saw_heat=""
 for _ in 1 2 3 4 5 6; do
     while IFS= read -r p; do
@@ -806,9 +808,29 @@ for _ in 1 2 3 4 5 6; do
 done
 
 case "$saw_heat" in
-    🔥|🌶|💤|❄) echo "PASS [heatmap] poller set @heat=$saw_heat on at least one tile" ;;
+    ⚪|🔥|🌶|💤|❄) echo "PASS [heatmap] poller set @heat=$saw_heat on at least one tile" ;;
     *) echo "FAIL [heatmap] no tile got @heat after 6s, got '$saw_heat'" >&2; exit 1 ;;
 esac
+
+# Quiet panes must NOT be 🔥 just because the wall came up — first sight
+# is observation, not activity. Verify every tile is in the neutral or
+# cool family. (A pane that legitimately produced output between explode
+# and now would land on 🔥/🌶, which would also be correct, but in this
+# fixture none of them do — the test sessions are sitting at idle prompts
+# the whole time, so any 🔥 here is the old "first sight = activity" bug.)
+while IFS= read -r p; do
+    [[ -z "$p" ]] && continue
+    h=$("${TMUX_CMD[@]}" show-options -pqv -t "$p" "@heat")
+    case "$h" in
+        ⚪|💤|❄|"") ;;
+        *)
+            echo "FAIL [heatmap] quiet pane $p reported active glyph '$h' (should be ⚪/💤/❄)" >&2
+            echo "  bug: 'first sight' is being treated as 'change detected'" >&2
+            exit 1
+            ;;
+    esac
+done < <("${TMUX_CMD[@]}" list-panes -t "$BASE_WIN" -F '#{pane_id}')
+echo "PASS [heatmap] quiet panes show neutral glyph, not false-hot"
 
 run_toggle "$HOME_SESSION:base"
 wait_for_pane_count "$BASE_WIN" 1 \
@@ -836,7 +858,7 @@ if kill -0 "$HEAT_PID" 2>/dev/null; then
 fi
 
 ANCHOR_PANE=$("${TMUX_CMD[@]}" list-panes -t "$BASE_WIN" -F '#{pane_id}' | head -1)
-for opt in "@heat" "@pane_last_hash" "@pane_last_change"; do
+for opt in "@heat" "@pane_last_hash" "@pane_last_change" "@pane_first_sight"; do
     leaked=$("${TMUX_CMD[@]}" show-options -pqv -t "$ANCHOR_PANE" "$opt")
     if [[ -n "$leaked" ]]; then
         echo "FAIL [heatmap teardown] $opt leaked on anchor pane: '$leaked'" >&2

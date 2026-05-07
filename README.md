@@ -72,7 +72,7 @@ re-sourcing `tmux.conf`.
 | `@explode-layout`        | `columns`   | `columns` (default) = column-biased custom layout — taller tiles, better for reading streaming output. `tiled` = tmux's built-in tiled layout (the pre-1.x default). |
 | `@explode-min-pane-width` | `40`        | Floor on per-column width (cells) when the layout builder picks a column count. Prevents tiles from getting too narrow to read on ultrawide screens with many panes. Ignored when `@explode-layout = tiled`. |
 | `@explode-target-aspect` | `0.5`       | Target tile aspect ratio (width ÷ height). Default `0.5` = each tile ≈ 2× as tall as wide. Lower = even taller; `1.0` = square; `2.0` = landscape. Ignored when `@explode-layout = tiled`. |
-| `@explode-heatmap`       | `on`        | When `on`, prepends a per-tile activity heatmap glyph (🔥 hot, 🌶 warm, 💤 cool, ❄ cold) to each border label so you can glance at the wall and see which agents are producing output now vs. which have gone quiet. Set to `off` to skip the poller and keep borders unchanged. In-place walls only. |
+| `@explode-heatmap`       | `on`        | When `on`, prepends a per-tile activity heatmap glyph (⚪ no observation yet, 🔥 hot, 🌶 warm, 💤 cool, ❄ cold) to each border label so you can glance at the wall and see which agents are producing output now vs. which have gone quiet. Set to `off` to skip the poller and keep borders unchanged. In-place walls only. |
 
 Example:
 
@@ -137,14 +137,20 @@ set -g @explode-window-name 'glance'
 - Inner sessions get their `status` option set to `off` while the wall is
   active so status bars don't stack inside each pane. The previous value is
   restored on toggle-off.
-- Each tile's border label is prefixed with an activity heatmap glyph (🔥
-  ≤5s since last buffer change, 🌶 ≤30s, 💤 ≤2m, ❄ older). A small
-  background poller samples each tile every ~2s and records the timestamp
-  of the last visible-buffer change, so quiet panes visibly cool over time
-  even when no event fires. Panes in copy mode hold their current glyph
-  (so reading scrollback doesn't falsely cool them). The poller is killed
-  on toggle-off and per-pane markers are wiped before panes return to
-  their origin windows. Disable with `set -g @explode-heatmap off`.
+- Each tile's border label is prefixed with an activity heatmap glyph
+  driven by a small background poller (~2s tick) that records the
+  timestamp of each tile's last visible-buffer change. Once a real change
+  has been observed, the glyph reflects time since that change: 🔥 ≤5s,
+  🌶 ≤30s, 💤 ≤2m, ❄ older — so quiet panes visibly cool even when no
+  event fires. **Before any change has been observed**, the poller has
+  no honest basis to claim activity (tmux doesn't expose pre-explode
+  timing), so the tile shows a neutral ⚪ for the first 2 minutes, then
+  falls through to 💤 and ❄ on its own. That keeps a pane that was
+  already idle before you exploded from masquerading as 🔥 just because
+  the wall just went up. Panes in copy mode hold their current glyph (so
+  reading scrollback doesn't falsely cool them). The poller is killed on
+  toggle-off and per-pane markers are wiped before panes return to their
+  origin windows. Disable with `set -g @explode-heatmap off`.
 - [tmux-resurrect](https://github.com/tmux-plugins/tmux-resurrect) and
   [tmux-continuum](https://github.com/tmux-plugins/tmux-continuum) are the
   only real footgun: an autosave that fires while an in-place wall is
