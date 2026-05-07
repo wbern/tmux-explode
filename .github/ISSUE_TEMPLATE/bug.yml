@@ -1,0 +1,59 @@
+name: Bug report
+description: Something doesn't work the way it's documented
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what did you get instead?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: |
+        Minimal steps to reproduce. If you can repro inside `./tests/demo.sh`,
+        say which scope/mode and what key sequence triggered it.
+      placeholder: |
+        1. tmux new-session -s a; tmux new-session -d -s b
+        2. prefix + O
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: tmux-version
+    attributes:
+      label: tmux version
+      description: Output of `tmux -V`
+      placeholder: tmux 3.6a
+    validations:
+      required: true
+  - type: input
+    id: bash-version
+    attributes:
+      label: bash version
+      description: Output of `bash --version | head -1`
+      placeholder: GNU bash, version 5.2.37(1)-release
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: macOS 14.6 / Ubuntu 22.04 / Arch Linux
+    validations:
+      required: true
+  - type: textarea
+    id: options
+    attributes:
+      label: Plugin options
+      description: |
+        Output of `tmux show-options -g | grep '@explode'`
+      render: text
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Logs, screenshots, GIFs.

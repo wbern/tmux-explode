@@ -1,0 +1,23 @@
+name: Feature request
+description: Suggest a new behaviour or option
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Describe the workflow, not the proposed implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How would you like the plugin to behave? Be specific about keybindings, options, or scope.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: tmux built-ins (`choose-tree -Zw`, `display-panes`), other plugins, etc.

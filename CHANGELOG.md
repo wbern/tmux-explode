@@ -1,0 +1,67 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+Releases from `v1.0.1` onwards are produced automatically by
+[semantic-release](https://github.com/semantic-release/semantic-release) from
+[Conventional Commits](https://www.conventionalcommits.org/). Hand edits below
+the auto-generated section may be overwritten.
+
+<!-- semantic-release will insert new releases above this line -->
+
+## [1.0.0] - 2026-05-07
+
+First tagged release. Captures the work that landed before the project
+adopted automated versioning.
+
+### Added
+
+- `prefix + O` toggles a tiled wall of every terminal on the tmux server and
+  back. Default `all` scope covers the current session's other windows AND
+  nested attaches to every other session, in the current window.
+- Three scopes: `all` (default, hybrid), `session` (current session only,
+  uses an `overview` window), `server` (other sessions only, in place).
+- Two pane-gathering modes: `active` (only the active pane of each window)
+  and `all` (every pane).
+- Column-biased custom layout (default `columns`, set `@explode-layout
+  tiled` for the old behaviour). Tiles default to ~2× tall as wide for
+  reading streaming output, configurable via `@explode-target-aspect` and
+  floored by `@explode-min-pane-width`.
+- Per-tile labelled borders distinguishing the anchor pane (`◉ here`),
+  local panes (`◫ <window>`), and nested-session attaches (`⇄ <session>`).
+  Styles configurable via `@explode-style-anchor`, `@explode-style-local`,
+  `@explode-style-remote`. Both `pane-border-status` and
+  `pane-border-format` are saved and restored.
+- Per-pane activity heatmap glyph (`⚪ 🔥 🌶 💤 ❄`) driven by a background
+  poller (~2s tick). Bucket reflects time since the pane's last
+  visible-buffer change, so quiet panes visibly cool without needing a
+  fresh event. Disable with `@explode-heatmap off`.
+- Cool/cold tiles get a faint navy `pane-style` wash so the eye skips
+  parked panes. Disable with `@explode-dim-cold off`; override per-tier
+  with `@explode-style-cool` / `@explode-style-cold`.
+- Inner sessions get `status off` and `window-size smallest` while the
+  wall is active, restored on toggle-off, so status bars don't stack and
+  TUI output doesn't paint below the visible tile region.
+- One-wall-server-wide invariant: toggling on tears down any other wall
+  already up — in any session, in any scope — before building the new
+  one. Sweeps stranded overview windows on every toggle.
+- `./tests/demo.sh` for live attach or headless capture; Docker-based
+  recording flow for the README GIF.
+
+### Changed
+
+- Wall layout default switched from tmux's built-in `tiled` to a
+  column-biased custom layout. Set `@explode-layout tiled` to restore.
+
+### Project
+
+- MIT licensed.
+- Visual snapshot tests run in CI on `ubuntu-latest`. Manually tested on
+  tmux 3.6a (Homebrew on recent macOS).
+- Requires bash 4+ (`mapfile`, `declare -A`).
+- Local `commit-msg` hook rejects AI-attribution trailers.
+
+[1.0.0]: https://github.com/wbern/tmux-explode/releases/tag/v1.0.0

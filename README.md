@@ -1,5 +1,10 @@
 # tmux_explode
 
+[![test](https://github.com/wbern/tmux-explode/actions/workflows/test.yml/badge.svg)](https://github.com/wbern/tmux-explode/actions/workflows/test.yml)
+[![release](https://github.com/wbern/tmux-explode/actions/workflows/release.yml/badge.svg)](https://github.com/wbern/tmux-explode/actions/workflows/release.yml)
+[![GitHub release](https://img.shields.io/github/v/release/wbern/tmux-explode?sort=semver)](https://github.com/wbern/tmux-explode/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A tmux plugin that "explodes" every tmux window into a single tiled overview
 window of split panes, then "unexplodes" them back to their original windows.
 One keybinding to glance at every running terminal at once, then return to
