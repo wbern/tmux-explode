@@ -333,8 +333,8 @@ start_heatmap_poller() {
     # toggle so option changes take effect without re-sourcing tmux.conf.
     local dim_cold style_cool style_cold
     dim_cold=$(get_tmux_option "@explode-dim-cold" "on")
-    style_cool=$(get_tmux_option "@explode-style-cool" "bg=colour234")
-    style_cold=$(get_tmux_option "@explode-style-cold" "bg=colour237")
+    style_cool=$(get_tmux_option "@explode-style-cool" "bg=#0a0a18")
+    style_cold=$(get_tmux_option "@explode-style-cold" "bg=#10102a")
 
     # nohup + full redirection lets the poller outlive the run-shell
     # invocation that fired this script. disown makes sure bash isn't
@@ -370,7 +370,7 @@ stop_heatmap_poller() {
         tmux set-option -p -u -t "$pane_id" "@pane_last_hash" 2>/dev/null || true
         tmux set-option -p -u -t "$pane_id" "@heat" 2>/dev/null || true
         tmux set-option -p -u -t "$pane_id" "@heat_style" 2>/dev/null || true
-        tmux set-option -p -u -t "$pane_id" pane-style 2>/dev/null || true
+        tmux select-pane -t "$pane_id" -P "default" 2>/dev/null || true
     done < <(tmux list-panes -t "$CURRENT_WIN" -F '#{pane_id}' 2>/dev/null || true)
 }
 
@@ -499,7 +499,7 @@ teardown_stranded_overview() {
         tmux set-option -p -u -t "$pane_id" "@pane_last_hash" 2>/dev/null || true
         tmux set-option -p -u -t "$pane_id" "@heat" 2>/dev/null || true
         tmux set-option -p -u -t "$pane_id" "@heat_style" 2>/dev/null || true
-        tmux set-option -p -u -t "$pane_id" pane-style 2>/dev/null || true
+        tmux select-pane -t "$pane_id" -P "default" 2>/dev/null || true
 
         if [[ -n "${orig_session:-}" ]]; then
             tmux kill-pane -t "$pane_id" 2>/dev/null || true
@@ -581,7 +581,7 @@ teardown_inplace_wall() {
         tmux set-option -p -u -t "$pane_id" "@pane_last_hash" 2>/dev/null || true
         tmux set-option -p -u -t "$pane_id" "@heat" 2>/dev/null || true
         tmux set-option -p -u -t "$pane_id" "@heat_style" 2>/dev/null || true
-        tmux set-option -p -u -t "$pane_id" pane-style 2>/dev/null || true
+        tmux select-pane -t "$pane_id" -P "default" 2>/dev/null || true
 
         if [[ -n "${orig_session:-}" ]]; then
             if [[ -n "${last_change:-}" ]] \
@@ -963,7 +963,7 @@ unexplode_inplace() {
         tmux set-option -p -u -t "$pane_id" "@pane_last_hash" 2>/dev/null || true
         tmux set-option -p -u -t "$pane_id" "@heat" 2>/dev/null || true
         tmux set-option -p -u -t "$pane_id" "@heat_style" 2>/dev/null || true
-        tmux set-option -p -u -t "$pane_id" pane-style 2>/dev/null || true
+        tmux select-pane -t "$pane_id" -P "default" 2>/dev/null || true
 
         if [[ -n "${orig_session:-}" ]]; then
             # Stash this remote tile's last-change timestamp on the inner

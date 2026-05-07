@@ -20,18 +20,32 @@ SOCKET="${1:?socket path required}"
 WIN_ID="${2:?window id required}"
 TICK="${3:-2}"
 
-# Cool/cold panes get a dimmed pane-style so the user's eye can skip
-# over quiet tiles without scanning. Defaults set bg= (not fg=) because
-# TUIs like Claude Code emit explicit ANSI fg colors on almost every
-# cell — pane-style fg only "shows through" on cells that don't set fg
-# themselves, which is rare on agent walls. bg dimming is far more
-# reliable: most TUIs leave bg at default, so a slight gray bg recedes
-# the whole tile against the surrounding terminal black. Set
-# EXPLODE_DIM_COLD=off to disable, or override the per-tier styles via
-# EXPLODE_STYLE_COOL / EXPLODE_STYLE_COLD.
+# Cool/cold panes get a faint navy bg so the user's eye can register
+# "this one's parked" without the tile screaming for attention. Two
+# subtleties shaped these defaults:
+#
+#   - TUIs like Claude Code paint nearly every cell with explicit ANSI
+#     fg colors, so `fg=` in pane-style only "shows through" on the rare
+#     uncolored cell. bg= is the only knob that consistently affects
+#     TUI walls.
+#
+#   - On a near-black terminal, NO bg can make a tile recede (you can't
+#     go darker than #000000). A LIGHTER gray bg makes the tile stand
+#     OUT, which is the opposite of what we want. The navy hex values
+#     below sidestep this by adding semantic *hue* — a faint blue tint
+#     reads as "asleep / off duty" rather than "needs your attention",
+#     even though it has visible contrast against pure black.
+#
+# Hex values bypass terminal palette remapping (themes like gruvbox or
+# solarized override colour234/237 with non-neutral palette entries,
+# which is why earlier palette-index defaults rendered yellowish on some
+# setups).
+#
+# Set EXPLODE_DIM_COLD=off to disable, or override the per-tier styles
+# via EXPLODE_STYLE_COOL / EXPLODE_STYLE_COLD.
 DIM_COLD="${EXPLODE_DIM_COLD:-on}"
-STYLE_COOL="${EXPLODE_STYLE_COOL:-bg=colour234}"
-STYLE_COLD="${EXPLODE_STYLE_COLD:-bg=colour237}"
+STYLE_COOL="${EXPLODE_STYLE_COOL:-bg=#0a0a18}"
+STYLE_COLD="${EXPLODE_STYLE_COLD:-bg=#10102a}"
 
 T() { tmux -S "$SOCKET" "$@"; }
 
@@ -108,15 +122,19 @@ while :; do
 
         T set-option -p -t "$pane_id" "@heat" "$glyph" 2>/dev/null || true
 
-        # Only re-issue pane-style when the desired style changes — every
-        # set-option on pane-style triggers a redraw, and panes that sit
-        # on the same bucket for many ticks shouldn't flicker.
+        # Per-pane styling in tmux 3.6a is `select-pane -P style`, NOT
+        # `set-option -p pane-style` — the option name doesn't exist as
+        # a settable option (it's synthesized output of select-pane -P).
+        # Only re-issue when the desired style changes so a pane sitting
+        # on the same bucket for many ticks doesn't flicker. The marker
+        # @heat_style records what we last applied so the comparison
+        # survives across ticks.
         prev_style=$(T show-options -pqv -t "$pane_id" "@heat_style" 2>/dev/null) || prev_style=""
         if [[ "$prev_style" != "$style" ]]; then
             if [[ -n "$style" ]]; then
-                T set-option -p -t "$pane_id" pane-style "$style" 2>/dev/null || true
+                T select-pane -t "$pane_id" -P "$style" 2>/dev/null || true
             else
-                T set-option -p -u -t "$pane_id" pane-style 2>/dev/null || true
+                T select-pane -t "$pane_id" -P "default" 2>/dev/null || true
             fi
             T set-option -p -t "$pane_id" "@heat_style" "$style" 2>/dev/null || true
         fi
