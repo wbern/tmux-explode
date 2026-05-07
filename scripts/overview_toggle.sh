@@ -182,10 +182,11 @@ restore_window_order() {
 }
 
 explode() {
-    # Defensive: clear any stranded overview windows server-wide before we
-    # build. A leftover from a previous crashed/skipped unexplode in this
-    # session would cause us to bail on the name-collision check below.
-    sweep_stranded_overviews
+    # Single-wall semantics: tear down ANY existing wall server-wide
+    # (in-place or session-scope) before we build a new one. Catches
+    # both stale strands from crashed unexplodes AND a live wall in some
+    # other session that would otherwise corrupt our build.
+    sweep_existing_walls
 
     # Refuse to clobber an existing window with the configured name. The user
     # can rename it or change @explode-window-name and try again.
@@ -542,6 +543,167 @@ teardown_stranded_overview() {
     fi
 }
 
+# Tear down a single in-place wall window (server/all scope) without
+# killing the window itself — the wall lives inside a regular user
+# window, so we restore the border options and dismantle the artifacts
+# but leave the user's window intact.
+#
+# Mirrors unexplode_inplace's body but parameterized on (wid, sess) so
+# it works against an arbitrary wall in any session — the version sweep
+# uses to clean a wall left up in some other session before we build
+# our own. Skips restore_window_order (the per-session window-index
+# bookkeeping is a luxury for the user's CURRENT toggle and would need
+# a much wider parameterization).
+teardown_inplace_wall() {
+    local wid="$1" sess="$2"
+
+    # Stop the poller FIRST so a final tick can't race with our pane
+    # marker wipes.
+    local pid
+    pid=$(tmux show-options -wqv -t "$wid" "@explode_heat_pid" 2>/dev/null || true)
+    if [[ -n "$pid" ]]; then
+        kill "$pid" 2>/dev/null || true
+    fi
+    tmux set-option -w -u -t "$wid" "@explode_heat_pid" 2>/dev/null || true
+
+    local live_windows
+    live_windows=$(tmux list-windows -t "$sess" -F '#{window_id}' 2>/dev/null || true)
+
+    declare -A first_pane_of_window=()
+    local now_ts
+    now_ts=$(date +%s)
+
+    local SEP=$'\x1f'
+    local pane_id orig_session saved orig_name orig_id orig_index last_change
+    while IFS="$SEP" read -r pane_id orig_session saved orig_name orig_id orig_index last_change; do
+        [[ -z "$pane_id" ]] && continue
+
+        tmux set-option -p -u -t "$pane_id" "@pane_last_hash" 2>/dev/null || true
+        tmux set-option -p -u -t "$pane_id" "@heat" 2>/dev/null || true
+        tmux set-option -p -u -t "$pane_id" "@heat_style" 2>/dev/null || true
+        tmux set-option -p -u -t "$pane_id" pane-style 2>/dev/null || true
+
+        if [[ -n "${orig_session:-}" ]]; then
+            if [[ -n "${last_change:-}" ]] \
+               && [[ "$last_change" =~ ^[0-9]+$ ]] \
+               && (( last_change > 0 && last_change <= now_ts )); then
+                tmux set-option -t "$orig_session" "@explode_last_change" "$last_change" 2>/dev/null || true
+            fi
+
+            if [[ "${saved:-}" == "unset" ]]; then
+                tmux set-option -u -t "$orig_session" status 2>/dev/null || true
+            elif [[ "${saved:-}" == set:* ]]; then
+                tmux set-option -t "$orig_session" status "${saved#set:}" 2>/dev/null || true
+            fi
+
+            tmux kill-pane -t "$pane_id" 2>/dev/null || true
+            continue
+        fi
+
+        # No @orig_window: original anchor pane (or something the user
+        # added that we never gathered). Leave in place.
+        [[ -z "${orig_name:-}" ]] && continue
+
+        if [[ -n "${orig_id:-}" ]] && grep -Fxq "$orig_id" <<< "$live_windows"; then
+            tmux join-pane -s "$pane_id" -t "$orig_id" 2>/dev/null || true
+            continue
+        fi
+
+        local group_key="${orig_id:-name:$orig_name}"
+        if [[ -z "${first_pane_of_window[$group_key]:-}" ]]; then
+            tmux break-pane -d -s "$pane_id" -n "$orig_name" 2>/dev/null || true
+            first_pane_of_window[$group_key]="$pane_id"
+        else
+            tmux join-pane -s "$pane_id" -t "${first_pane_of_window[$group_key]}" 2>/dev/null || true
+        fi
+    done < <(tmux list-panes -t "$wid" \
+             -F "#{pane_id}${SEP}#{@orig_session}${SEP}#{@orig_session_status}${SEP}#{@orig_window}${SEP}#{@orig_window_id}${SEP}#{@orig_window_index}${SEP}#{@pane_last_change}" 2>/dev/null)
+
+    # Restore window-scoped border options. Both keys: `set:VALUE` means
+    # the user had it pinned to VALUE before we touched it; `unset` means
+    # they were inheriting the global default (drop the override with -u).
+    local saved_status saved_format
+    saved_status=$(tmux show-options -wqv -t "$wid" "@explode_saved_border_status" 2>/dev/null || true)
+    if [[ "$saved_status" == set:* ]]; then
+        tmux set-option -w -t "$wid" pane-border-status "${saved_status#set:}" 2>/dev/null || true
+    elif [[ "$saved_status" == "unset" ]]; then
+        tmux set-option -w -u -t "$wid" pane-border-status 2>/dev/null || true
+    fi
+    tmux set-option -w -u -t "$wid" "@explode_saved_border_status" 2>/dev/null || true
+
+    saved_format=$(tmux show-options -wqv -t "$wid" "@explode_saved_border_format" 2>/dev/null || true)
+    if [[ "$saved_format" == set:* ]]; then
+        tmux set-option -w -t "$wid" pane-border-format "${saved_format#set:}" 2>/dev/null || true
+    elif [[ "$saved_format" == "unset" ]]; then
+        tmux set-option -w -u -t "$wid" pane-border-format 2>/dev/null || true
+    fi
+    tmux set-option -w -u -t "$wid" "@explode_saved_border_format" 2>/dev/null || true
+}
+
+# Find any explode wall already up on the server (in-place or session-
+# scope) and tear it down before we build a new one. The user's "single
+# wall server-wide" semantics: a wall live in session A while you toggle
+# in session B was making a mess of B's new wall — nested attaches
+# inheriting A's `overview` window, tile counts blowing past the
+# column-bias layout's pane count, the screenshot-with-tiny-corner-tiles
+# bug.
+#
+# Detection per window (other than CURRENT_WIN):
+#   - In-place wall: window option @explode_saved_border_status is set
+#     AND at least one pane carries @orig_session/@orig_window. Calls
+#     teardown_inplace_wall — keeps the user's window, restores borders,
+#     dismantles only the artifacts.
+#   - Session-scope wall: window name == @explode-window-name AND at
+#     least one pane carries artifacts. Calls teardown_stranded_overview
+#     — kills the dedicated overview window once empty.
+#
+# Skips CURRENT_WIN (we're about to use that window — and the upstream
+# `inplace_explode_active` guard already routes a re-toggle on a wall
+# window into unexplode rather than into us).
+#
+# Deliberately does NOT skip walls being viewed by clients — the user
+# explicitly asked for one wall at a time. `sweep_stranded_overviews`
+# keeps its viewer-aware safety for the post-unexplode belt-and-braces
+# pass; that's a different regime (cleaning leftovers, not making room).
+#
+# Idempotent. Cheap when there's nothing to find.
+sweep_existing_walls() {
+    local sess
+    while IFS= read -r sess; do
+        [[ -z "$sess" ]] && continue
+
+        local wid wname
+        while IFS=$'\t' read -r wid wname; do
+            [[ -z "$wid" || "$wid" == "$CURRENT_WIN" ]] && continue
+
+            local has_artifacts
+            has_artifacts=$(tmux list-panes -t "$wid" \
+                            -F '#{@orig_session}#{@orig_window}' 2>/dev/null \
+                            | grep -v '^$' | head -1 || true)
+            [[ -z "$has_artifacts" ]] && continue
+
+            local saved_status
+            saved_status=$(tmux show-options -wqv -t "$wid" \
+                           "@explode_saved_border_status" 2>/dev/null || true)
+            if [[ -n "$saved_status" ]]; then
+                teardown_inplace_wall "$wid" "$sess"
+                continue
+            fi
+
+            if [[ "$wname" == "$OVERVIEW" ]]; then
+                teardown_stranded_overview "$wid" "$sess"
+                continue
+            fi
+
+            # Artifacts present but no recognizable wall shape (window
+            # not named OVERVIEW and no saved-border marker). Could be a
+            # partial state we don't own — leave it alone rather than
+            # silently destroy unknown panes.
+        done < <(tmux list-windows -t "$sess" \
+                 -F '#{window_id}'$'\t''#{window_name}' 2>/dev/null)
+    done < <(tmux list-sessions -F '#{session_name}' 2>/dev/null)
+}
+
 # Walk every session on the server and tear down any window named like
 # our @explode-window-name that carries our artifact markers AND is not
 # currently being viewed by any client. Defensive cleanup for two
@@ -679,11 +841,12 @@ other_session_names() {
 }
 
 explode_server() {
-    # Defensive sweep BEFORE we attach into anything. Without this, a sibling
-    # session whose previous wall stranded an `overview` window would have
-    # that window inherited by our nested attach, double-nesting whatever
-    # the dead wall was attached to.
-    sweep_stranded_overviews
+    # Single-wall sweep BEFORE we attach into anything. Tears down any
+    # other wall on the server (in-place or session-scope) so a sibling
+    # session's wall can't have its overview window inherited by our
+    # nested attach (double-nesting whatever the old wall was attached
+    # to), and so two simultaneous walls can't fight over layout space.
+    sweep_existing_walls
 
     local others=()
     local s
@@ -714,9 +877,9 @@ explode_server() {
 # ---------------------------------------------------------------------------
 
 explode_all() {
-    # Same defensive sweep as explode_server — strands in sibling sessions
-    # would corrupt the nested attaches we're about to create.
-    sweep_stranded_overviews
+    # Same single-wall sweep as explode_server — any other wall on the
+    # server is torn down first so this one has clean ground to build on.
+    sweep_existing_walls
 
     # Look ahead — if there are no other windows in this session and no
     # other sessions on the server, there is nothing to gather. Bail before

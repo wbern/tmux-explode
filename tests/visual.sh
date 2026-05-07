@@ -1262,3 +1262,82 @@ fi
 echo "PASS [post-unexplode sweep] cross-session strand cleaned by end-of-unexplode sweep"
 
 "${TMUX_CMD[@]}" set-option -gu @explode-scope
+
+# ---------------------------------------------------------------------------
+# Scenario 16: single-wall semantics — toggling in session B tears down a
+# wall that's already up in session A before building B's wall.
+#
+# Two simultaneous in-place walls used to interact badly: A's wall would
+# attach into B and create a nested attach pane carrying A's overview
+# window, which B's explode would then pull in again as another tile —
+# layout pane counts diverging from window pane counts, the screenshot
+# bug with tiles confined to a tiny corner. The fix: explode_* paths
+# call sweep_existing_walls first, which uses teardown_inplace_wall to
+# dismantle any other wall on the server.
+# ---------------------------------------------------------------------------
+cleanup
+"${TMUX_CMD[@]}" new-session -d -s alpha_sess -n base -x 120 -y 40
+label_pane "alpha_sess:base.0" "ALPHA"
+"${TMUX_CMD[@]}" new-session -d -s beta_sess  -n base -x 120 -y 40
+label_pane "beta_sess:base.0" "BETA"
+wait_for_markers "alpha_sess" 1
+wait_for_markers "beta_sess"  1
+
+ALPHA_WIN=$("${TMUX_CMD[@]}" display-message -p -t "alpha_sess:base" '#{window_id}')
+BETA_WIN=$("${TMUX_CMD[@]}" display-message -p -t "beta_sess:base"  '#{window_id}')
+
+"${TMUX_CMD[@]}" set-option -g @explode-scope server
+
+# Build alpha's wall first: anchor + nested attach into beta_sess = 2 panes.
+run_toggle "alpha_sess:base"
+wait_for_pane_count "$ALPHA_WIN" 2 \
+    || { echo "FAIL [single-wall] alpha never reached 2 panes" >&2; exit 1; }
+
+ALPHA_SAVED=$("${TMUX_CMD[@]}" show-options -wqv -t "$ALPHA_WIN" \
+              "@explode_saved_border_status" 2>/dev/null || true)
+if [[ -z "$ALPHA_SAVED" ]]; then
+    echo "FAIL [single-wall] alpha's wall marker never set" >&2
+    exit 1
+fi
+
+# Now toggle in beta. sweep_existing_walls should tear down alpha's wall
+# before building beta's. End state: alpha back to 1 pane with markers
+# wiped, beta a fresh 2-pane wall.
+run_toggle "beta_sess:base"
+wait_for_pane_count "$BETA_WIN" 2 \
+    || { echo "FAIL [single-wall] beta never reached 2 panes" >&2; exit 1; }
+wait_for_pane_count "$ALPHA_WIN" 1 \
+    || { echo "FAIL [single-wall] alpha not torn down before beta built" >&2; exit 1; }
+
+ALPHA_SAVED_AFTER=$("${TMUX_CMD[@]}" show-options -wqv -t "$ALPHA_WIN" \
+                    "@explode_saved_border_status" 2>/dev/null || true)
+if [[ -n "$ALPHA_SAVED_AFTER" ]]; then
+    echo "FAIL [single-wall] alpha's saved-border marker survived teardown: $ALPHA_SAVED_AFTER" >&2
+    exit 1
+fi
+
+# Sanity check: alpha's surviving pane is the original anchor, not a
+# stranded nested-attach. The anchor never had @orig_session set.
+ALPHA_PANE=$("${TMUX_CMD[@]}" list-panes -t "$ALPHA_WIN" -F '#{pane_id}' | head -1)
+ALPHA_ORIG=$("${TMUX_CMD[@]}" show-options -pqv -t "$ALPHA_PANE" \
+             "@orig_session" 2>/dev/null || true)
+if [[ -n "$ALPHA_ORIG" ]]; then
+    echo "FAIL [single-wall] alpha's surviving pane carries @orig_session=$ALPHA_ORIG" >&2
+    exit 1
+fi
+
+BETA_SAVED=$("${TMUX_CMD[@]}" show-options -wqv -t "$BETA_WIN" \
+             "@explode_saved_border_status" 2>/dev/null || true)
+if [[ -z "$BETA_SAVED" ]]; then
+    echo "FAIL [single-wall] beta's wall marker not set" >&2
+    exit 1
+fi
+
+# Toggle off beta to leave the harness clean.
+run_toggle "beta_sess:base"
+wait_for_pane_count "$BETA_WIN" 1 \
+    || { echo "FAIL [single-wall] beta never collapsed back to 1 pane" >&2; exit 1; }
+
+echo "PASS [single-wall] toggling in B tears down A's wall before building B's"
+
+"${TMUX_CMD[@]}" set-option -gu @explode-scope
