@@ -9,6 +9,9 @@
 # Run from anywhere: ./tests/visual.sh
 
 set -euo pipefail
+# Log the failing line+command on any unexpected exit. Removed once we
+# have a green CI run again.
+trap 'rc=$?; echo "ERR trap: line=$LINENO rc=$rc cmd=${BASH_COMMAND}" >&2' ERR
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}" )" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
