@@ -999,6 +999,52 @@ wait_for_pane_count "$BASE_WIN" 1 \
 
 "${TMUX_CMD[@]}" set-option -gu @explode-scope
 
+# Cross-window viewer case: target session has a stranded overview that is
+# NOT its currently-active window. The earlier prune_stranded_overview only
+# checked the active window; sweep_stranded_overviews must now find and tear
+# down strands regardless of which window the session has selected.
+cleanup
+"${TMUX_CMD[@]}" new-session -d -s "$HOME_SESSION" -n base -x 120 -y 40
+label_pane "$HOME_SESSION:base.0" "HOME"
+"${TMUX_CMD[@]}" new-session -d -s "victim" -n real -x 120 -y 40
+label_pane "victim:real.0" "VICTIM-REAL"
+wait_for_markers "$HOME_SESSION" 1
+wait_for_markers "victim" 1
+
+"${TMUX_CMD[@]}" new-window -t "victim:" -n overview
+STRAY_PANE=$("${TMUX_CMD[@]}" display-message -p -t "victim:overview" '#{pane_id}')
+"${TMUX_CMD[@]}" set-option -p -t "$STRAY_PANE" "@orig_session" "ghost"
+label_pane "$STRAY_PANE" "STRANDED-INACTIVE"
+# Deliberately leave victim's active window as `real`, NOT overview — the
+# old prune_stranded_overview would skip in this configuration.
+"${TMUX_CMD[@]}" select-window -t "victim:real"
+
+VICTIM_ACTIVE_BEFORE=$("${TMUX_CMD[@]}" display-message -p -t "victim" '#{window_name}')
+if [[ "$VICTIM_ACTIVE_BEFORE" != "real" ]]; then
+    echo "FAIL [stranded sweep inactive] precondition: victim's active window not 'real', got '$VICTIM_ACTIVE_BEFORE'" >&2
+    exit 1
+fi
+
+BASE_WIN=$("${TMUX_CMD[@]}" display-message -p -t "$HOME_SESSION:base" '#{window_id}')
+"${TMUX_CMD[@]}" set-option -g @explode-scope server
+run_toggle "$HOME_SESSION:base"
+
+wait_for_pane_count "$BASE_WIN" 2 \
+    || { echo "FAIL [stranded sweep inactive] explode never reached 2 panes" >&2; exit 1; }
+
+if "${TMUX_CMD[@]}" list-windows -t "victim" -F '#{window_name}' | grep -Fxq overview; then
+    echo "FAIL [stranded sweep inactive] strand survived sweep even though it was not the active window" >&2
+    "${TMUX_CMD[@]}" list-windows -t "victim" >&2
+    exit 1
+fi
+echo "PASS [stranded sweep inactive] strand cleaned even when not the session's active window"
+
+run_toggle "$HOME_SESSION:base"
+wait_for_pane_count "$BASE_WIN" 1 \
+    || { echo "FAIL [stranded sweep inactive teardown] base never reduced to 1 pane" >&2; exit 1; }
+
+"${TMUX_CMD[@]}" set-option -gu @explode-scope
+
 # ---------------------------------------------------------------------------
 # Scenario 14: heat-state persistence across toggle cycles.
 #   (a) Local pane (rejoined to origin window) keeps @pane_last_change so
@@ -1156,5 +1202,63 @@ for bogus in "not-a-number" "$FUTURE_TS" "$ANCIENT_TS" "-1"; do
         || { echo "FAIL [persist garbage='$bogus' teardown] base never reduced to 1 pane" >&2; exit 1; }
 done
 echo "PASS [persist garbage] non-numeric / future / ancient values all dropped"
+
+"${TMUX_CMD[@]}" set-option -gu @explode-scope
+
+# ---------------------------------------------------------------------------
+# Scenario 15: post-unexplode sweep mops up cross-session strands.
+#
+# A strand that appears in some OTHER session DURING an in-place wall (e.g.
+# the inner attach renders that session's stranded overview from a previous
+# crashed cycle) doesn't go away when we kill the attach pane on unexplode —
+# the inner overview window has its own state that our toggle never owned.
+# The end-of-unexplode sweep is what eventually cleans it.
+#
+# Forge a strand in `ghost` AFTER the wall is up, then unexplode and assert
+# the strand is gone.
+# ---------------------------------------------------------------------------
+cleanup
+"${TMUX_CMD[@]}" new-session -d -s "$HOME_SESSION" -n base -x 120 -y 40
+label_pane "$HOME_SESSION:base.0" "HOME"
+"${TMUX_CMD[@]}" new-session -d -s "sib1" -n w1 -x 120 -y 40
+label_pane "sib1:w1.0" "SIB1"
+"${TMUX_CMD[@]}" new-session -d -s "ghost" -n real -x 120 -y 40
+label_pane "ghost:real.0" "GHOST-REAL"
+wait_for_markers "$HOME_SESSION" 1
+wait_for_markers "sib1" 1
+wait_for_markers "ghost" 1
+
+BASE_WIN=$("${TMUX_CMD[@]}" display-message -p -t "$HOME_SESSION:base" '#{window_id}')
+"${TMUX_CMD[@]}" set-option -g @explode-scope server
+run_toggle "$HOME_SESSION:base"
+# 3 panes = home anchor + sib1 attach + ghost attach
+wait_for_pane_count "$BASE_WIN" 3 \
+    || { echo "FAIL [post-unexplode sweep] explode never reached 3 panes" >&2; exit 1; }
+
+# Forge a strand in `ghost` mid-wall: a fresh `overview` window that the
+# in-place wall didn't create and won't clean up by itself (killing the
+# attach pane only drops our nested client; the inner overview window
+# survives).
+"${TMUX_CMD[@]}" new-window -t "ghost:" -n overview
+GHOST_STRAY=$("${TMUX_CMD[@]}" display-message -p -t "ghost:overview" '#{pane_id}')
+"${TMUX_CMD[@]}" set-option -p -t "$GHOST_STRAY" "@orig_session" "phantom"
+label_pane "$GHOST_STRAY" "GHOST-STRANDED"
+"${TMUX_CMD[@]}" select-window -t "ghost:real"
+
+if ! "${TMUX_CMD[@]}" list-windows -t "ghost" -F '#{window_name}' | grep -Fxq overview; then
+    echo "FAIL [post-unexplode sweep] precondition: forged strand not present in ghost" >&2
+    exit 1
+fi
+
+run_toggle "$HOME_SESSION:base"
+wait_for_pane_count "$BASE_WIN" 1 \
+    || { echo "FAIL [post-unexplode sweep] base never reduced to 1 pane" >&2; exit 1; }
+
+if "${TMUX_CMD[@]}" list-windows -t "ghost" -F '#{window_name}' | grep -Fxq overview; then
+    echo "FAIL [post-unexplode sweep] strand in ghost survived end-of-unexplode sweep" >&2
+    "${TMUX_CMD[@]}" list-windows -t "ghost" >&2
+    exit 1
+fi
+echo "PASS [post-unexplode sweep] cross-session strand cleaned by end-of-unexplode sweep"
 
 "${TMUX_CMD[@]}" set-option -gu @explode-scope

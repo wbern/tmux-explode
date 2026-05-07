@@ -140,6 +140,12 @@ unexplode() {
     done <<< "$panes_data"
 
     restore_window_order
+
+    # Belt-and-braces sweep AFTER our own teardown finishes. Catches anything
+    # we missed (a partial unexplode that bailed mid-loop, a strand in some
+    # other session that was never our wall to begin with). Cheap when there's
+    # nothing to find.
+    sweep_stranded_overviews
 }
 
 # Move restored windows back to their original indices. Two-phase: park each
@@ -176,6 +182,11 @@ restore_window_order() {
 }
 
 explode() {
+    # Defensive: clear any stranded overview windows server-wide before we
+    # build. A leftover from a previous crashed/skipped unexplode in this
+    # session would cause us to bail on the name-collision check below.
+    sweep_stranded_overviews
+
     # Refuse to clobber an existing window with the configured name. The user
     # can rename it or change @explode-window-name and try again.
     if tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -Fxq "$OVERVIEW"; then
@@ -442,58 +453,149 @@ apply_column_biased_layout() {
     fi
 }
 
-# Drop a stranded overview window in the target session before our nested
-# attach inherits its active-window pointer. Without this, a previous
-# session-scope explode that crashed before teardown leaves an `overview`
-# window sitting as the session's active window — and our `tmux attach -t
-# <name>` then renders THAT window in our tile, double-nesting whatever
-# the dead wall was attached to. Result: tile labelled "co-crew-jon"
-# silently shows "avc-crew-andrej"'s content.
+# Tear down a single stranded overview window. Walks its panes and undoes
+# what explode (session-scope) did: nested-attach panes get killed
+# (terminating their inner `tmux attach`, NOT the inner session itself),
+# local-origin panes rejoin their source window if it still exists or
+# break out anonymously if not. Then the now-empty overview window itself
+# is killed.
 #
-# Only fires when ALL of:
-#   - target's active window is named like our @explode-window-name,
-#   - it carries our @orig_session/@orig_window pane markers (so it's our
-#     artifact, not a window the user happened to name "overview"),
-#   - no client is currently attached to the target session (so we can't
-#     yank a window out from under a real viewer who's mid-wall).
-prune_stranded_overview() {
-    local name="$1"
+# Refuses to act when killing this window would destroy the session it
+# lives in (no other windows survive). Tolerates per-pane failures so one
+# stuck pane doesn't strand the rest.
+#
+# Caller is responsible for verifying this IS a stranded artifact (right
+# name + carries our markers + no client viewing) — we re-check the
+# fallback-window guard but otherwise trust the caller.
+teardown_stranded_overview() {
+    local wid="$1" sess="$2"
 
-    local active_wid active_wname
-    read -r active_wid active_wname < <(
-        tmux display-message -p -t "$name" '#{window_id} #{window_name}' 2>/dev/null
-    ) || return 0
-    [[ -z "${active_wid:-}" || "$active_wname" != "$OVERVIEW" ]] && return 0
-
-    local has_artifacts
-    has_artifacts=$(tmux list-panes -t "$active_wid" \
-                    -F '#{@orig_session}#{@orig_window}' 2>/dev/null \
-                    | grep -v '^$' | head -1 || true)
-    [[ -z "$has_artifacts" ]] && return 0
-
-    local any_client
-    any_client=$(tmux list-clients -t "$name" -F '#{client_name}' 2>/dev/null \
-                 | head -1 || true)
-    [[ -n "$any_client" ]] && return 0
-
-    # If the stranded overview is the session's only window, killing it
-    # would destroy the session itself. Refuse — leave the artifact in
-    # place and let the (likely unhappy) attach inherit it; better a
-    # mis-rendered tile than a vanished session.
     local fallback_wid
-    fallback_wid=$(tmux list-windows -t "$name" \
-                   -F '#{window_id} #{window_name}' 2>/dev/null \
-                   | awk -v ov="$OVERVIEW" '$2!=ov {print $1; exit}')
+    fallback_wid=$(tmux list-windows -t "$sess" -F '#{window_id}' 2>/dev/null \
+                   | grep -Fxv "$wid" | head -1 || true)
     [[ -z "$fallback_wid" ]] && return 0
 
-    tmux select-window -t "$fallback_wid" 2>/dev/null || true
-    tmux kill-window -t "$active_wid" 2>/dev/null || true
+    local live_windows
+    live_windows=$(tmux list-windows -t "$sess" -F '#{window_id}' 2>/dev/null || true)
+
+    # If this window is currently active in the session, point the session
+    # at the fallback BEFORE we kill it — otherwise tmux picks an arbitrary
+    # successor (and any inner attach pane targeting `sess` ends up looking
+    # at whatever happens to be the new active window).
+    local active_wid
+    active_wid=$(tmux display-message -p -t "$sess" '#{window_id}' 2>/dev/null || true)
+    if [[ "$active_wid" == "$wid" ]]; then
+        tmux select-window -t "$fallback_wid" 2>/dev/null || true
+    fi
+
+    local SEP=$'\x1f'
+    local pane_id orig_session orig_name orig_id
+    while IFS="$SEP" read -r pane_id orig_session orig_name orig_id; do
+        [[ -z "$pane_id" ]] && continue
+
+        # Wipe ephemeral wall markers before any pane move so they don't
+        # follow a local pane back to its origin window.
+        tmux set-option -p -u -t "$pane_id" "@pane_last_hash" 2>/dev/null || true
+        tmux set-option -p -u -t "$pane_id" "@heat" 2>/dev/null || true
+        tmux set-option -p -u -t "$pane_id" "@heat_style" 2>/dev/null || true
+        tmux set-option -p -u -t "$pane_id" pane-style 2>/dev/null || true
+
+        if [[ -n "${orig_session:-}" ]]; then
+            tmux kill-pane -t "$pane_id" 2>/dev/null || true
+            continue
+        fi
+
+        if [[ -z "${orig_name:-}" ]]; then
+            # Untagged pane — could be the placeholder shell from new-window
+            # or something the user added. Break it out so we don't kill
+            # potentially-real work; the user can deal with the orphan.
+            tmux break-pane -d -s "$pane_id" 2>/dev/null || true
+            continue
+        fi
+
+        if [[ -n "${orig_id:-}" ]] && grep -Fxq "$orig_id" <<< "$live_windows"; then
+            tmux join-pane -s "$pane_id" -t "$orig_id" 2>/dev/null || true
+            continue
+        fi
+
+        tmux break-pane -d -s "$pane_id" -n "$orig_name" 2>/dev/null || true
+    done < <(tmux list-panes -t "$wid" \
+             -F "#{pane_id}${SEP}#{@orig_session}${SEP}#{@orig_window}${SEP}#{@orig_window_id}" 2>/dev/null)
+
+    # If killing the last pane already collapsed the window (tmux destroys a
+    # window when its last pane dies), there's nothing left to do. The
+    # existence probe also guards the next list-panes from failing under
+    # pipefail and tripping set -e on the assignment below.
+    if ! tmux list-windows -t "$sess" -F '#{window_id}' 2>/dev/null \
+            | grep -Fxq "$wid"; then
+        return 0
+    fi
+
+    # Otherwise some pane teardown failed and survivors remain. Leave the
+    # window so the user can see the artifact rather than us silently
+    # destroying potentially-recoverable panes — kill ONLY if we somehow
+    # ended at zero (shouldn't normally hit this path).
+    local remaining
+    remaining=$(tmux list-panes -t "$wid" -F . 2>/dev/null | wc -l | tr -d ' ' || true)
+    if [[ "$remaining" == "0" ]]; then
+        tmux kill-window -t "$wid" 2>/dev/null || true
+    fi
+}
+
+# Walk every session on the server and tear down any window named like
+# our @explode-window-name that carries our artifact markers AND is not
+# currently being viewed by any client. Defensive cleanup for two
+# failure modes:
+#   1. A previous session-scope explode whose unexplode never ran (agent
+#      died, kill-server, manual kill-pane on the toggle, etc.). The
+#      stranded `overview` window then gets inherited by a future nested
+#      attach in some other session's wall, mis-rendering tiles.
+#   2. Any other state we may have left behind across the server that we
+#      can detect from our own markers.
+#
+# "Currently viewed" = some client's #{client_window} == this window's id.
+# Other clients on the same session but a different window are NOT a
+# reason to skip — the overview is dormant from their perspective. This
+# is intentionally more aggressive than a "is anyone attached to the
+# session" check; the user explicitly asked for exhaustive cleanup.
+#
+# In-place walls (server/all scope) live inside regular user windows,
+# never named OVERVIEW, so the name filter naturally protects them.
+#
+# Idempotent. Cheap when there's nothing to clean (just lists windows).
+sweep_stranded_overviews() {
+    # Build the set of window ids currently being viewed by some client.
+    # `list-clients` with no -t argument returns clients across the whole
+    # server, so one call covers every session.
+    local viewed
+    viewed=$(tmux list-clients -F '#{client_window}' 2>/dev/null || true)
+
+    local sess
+    while IFS= read -r sess; do
+        [[ -z "$sess" ]] && continue
+
+        local wid wname
+        while IFS=$'\t' read -r wid wname; do
+            [[ -z "$wid" || "$wname" != "$OVERVIEW" ]] && continue
+
+            local has_artifacts
+            has_artifacts=$(tmux list-panes -t "$wid" \
+                            -F '#{@orig_session}#{@orig_window}' 2>/dev/null \
+                            | grep -v '^$' | head -1 || true)
+            [[ -z "$has_artifacts" ]] && continue
+
+            if [[ -n "$viewed" ]] && grep -Fxq "$wid" <<< "$viewed"; then
+                continue
+            fi
+
+            teardown_stranded_overview "$wid" "$sess"
+        done < <(tmux list-windows -t "$sess" \
+                 -F '#{window_id}'$'\t''#{window_name}' 2>/dev/null)
+    done < <(tmux list-sessions -F '#{session_name}' 2>/dev/null)
 }
 
 add_session_attach_pane() {
     local name="$1"
-
-    prune_stranded_overview "$name"
 
     # Read & consume any saved last_change from a previous wall cycle so the
     # heatmap bucket reflects time elapsed during the gap instead of
@@ -577,6 +679,12 @@ other_session_names() {
 }
 
 explode_server() {
+    # Defensive sweep BEFORE we attach into anything. Without this, a sibling
+    # session whose previous wall stranded an `overview` window would have
+    # that window inherited by our nested attach, double-nesting whatever
+    # the dead wall was attached to.
+    sweep_stranded_overviews
+
     local others=()
     local s
     while IFS= read -r s; do
@@ -606,6 +714,10 @@ explode_server() {
 # ---------------------------------------------------------------------------
 
 explode_all() {
+    # Same defensive sweep as explode_server — strands in sibling sessions
+    # would corrupt the nested attaches we're about to create.
+    sweep_stranded_overviews
+
     # Look ahead — if there are no other windows in this session and no
     # other sessions on the server, there is nothing to gather. Bail before
     # we've touched any window options.
@@ -745,6 +857,14 @@ unexplode_inplace() {
 
     teardown_wall_borders
     restore_window_order
+
+    # Belt-and-braces sweep across the whole server after our own teardown.
+    # Catches strands in sibling sessions that we couldn't see during our own
+    # in-place wall (those sessions had their `overview` window inherited by
+    # our nested attach; killing the attach pane doesn't tear down their
+    # overview window — the inner `unexplode` was never run). Cheap when
+    # there's nothing to find.
+    sweep_stranded_overviews
 }
 
 # An in-place explosion (server or hybrid scope) is in progress when any pane
