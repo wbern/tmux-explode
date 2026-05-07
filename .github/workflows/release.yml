@@ -1,0 +1,37 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    # Skip the release job on the auto-commit semantic-release itself pushes
+    # back to main (the [skip ci] tag in the commit-msg template won't stop
+    # GitHub Actions, only some other CIs honor it). Without this guard the
+    # workflow would loop on every release.
+    if: "!contains(github.event.head_commit.message, 'chore(release):')"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+      - name: Run semantic-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          npx -y \
+            -p semantic-release@24 \
+            -p @semantic-release/changelog@6 \
+            -p @semantic-release/git@10 \
+            -p conventional-changelog-conventionalcommits@8 \
+            semantic-release
