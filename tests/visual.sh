@@ -1560,3 +1560,79 @@ echo "PASS [dim-cleanup] $DIM_CYCLES toggle cycles, anchor stayed default after 
 
 "${TMUX_CMD[@]}" set-option -gu @explode-scope
 "${TMUX_CMD[@]}" set-option -gu @explode-heat-tick
+
+# ---------------------------------------------------------------------------
+# Scenario 19: focus preservation — heatmap poller must NOT steal focus
+# when it applies a bucket-transition style to a non-active tile.
+#
+# Repro: `select-pane -t <pane> -P <style>` activates the target pane as
+# a side effect, even with -P. Before the fix, every hot→warm→cool→cold
+# transition yanked focus to whichever tile crossed the boundary, making
+# it impossible to keep typing into one tile while the wall ticked.
+#
+# Strategy: explode in server scope (so the wall has at least one
+# nested-attach tile to receive a style), pin the anchor as active,
+# stamp a non-anchor tile with a `last_change` from 200s ago so the
+# poller's next tick decides ❄ and tries to apply STYLE_COLD. With a
+# 50ms tick we get ~10 transitions per second; if the bug regresses,
+# focus moves off the anchor within a tick or two.
+# ---------------------------------------------------------------------------
+cleanup
+"${TMUX_CMD[@]}" new-session -d -s "$HOME_SESSION" -n base -x 120 -y 40
+label_pane "$HOME_SESSION:base.0" "HOME"
+"${TMUX_CMD[@]}" new-session -d -s "focsib1" -n w -x 120 -y 40
+label_pane "focsib1:w.0" "FOCSIB1"
+"${TMUX_CMD[@]}" new-session -d -s "focsib2" -n w -x 120 -y 40
+label_pane "focsib2:w.0" "FOCSIB2"
+wait_for_markers "$HOME_SESSION" 1
+wait_for_markers "focsib1" 1
+wait_for_markers "focsib2" 1
+
+BASE_WIN=$("${TMUX_CMD[@]}" display-message -p -t "$HOME_SESSION:base" '#{window_id}')
+ANCHOR_PANE=$("${TMUX_CMD[@]}" list-panes -t "$BASE_WIN" -F '#{pane_id}' | head -1)
+
+"${TMUX_CMD[@]}" set-option -g @explode-scope server
+"${TMUX_CMD[@]}" set-option -g @explode-heat-tick 0.05
+
+run_toggle "$HOME_SESSION:base"
+wait_for_pane_count "$BASE_WIN" 3 \
+    || { echo "FAIL [focus] explode never reached 3 panes" >&2; exit 1; }
+
+"${TMUX_CMD[@]}" select-pane -t "$ANCHOR_PANE"
+
+NON_ANCHOR=$("${TMUX_CMD[@]}" list-panes -t "$BASE_WIN" -F '#{pane_id}' \
+    | grep -v "^${ANCHOR_PANE}\$" | head -1)
+NOW_TS=$(date +%s)
+"${TMUX_CMD[@]}" set-option -p -t "$NON_ANCHOR" "@pane_last_change" "$((NOW_TS - 200))"
+"${TMUX_CMD[@]}" set-option -p -u -t "$NON_ANCHOR" "@heat_style" 2>/dev/null || true
+
+# Wait until the poller has actually applied a style to the non-anchor
+# tile — we want to assert "focus stayed put across a style application",
+# so it's the application moment that has to happen during this window.
+saw_style=""
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+    applied=$("${TMUX_CMD[@]}" show-options -pqv -t "$NON_ANCHOR" "@heat_style" 2>/dev/null)
+    if [[ -n "$applied" ]]; then
+        saw_style="$applied"
+        break
+    fi
+    sleep 0.1
+done
+if [[ -z "$saw_style" ]]; then
+    echo "FAIL [focus] poller never applied a style to the non-anchor tile" >&2
+    exit 1
+fi
+
+POST_ACTIVE=$("${TMUX_CMD[@]}" display-message -p -t "$BASE_WIN" '#{pane_id}')
+if [[ "$POST_ACTIVE" != "$ANCHOR_PANE" ]]; then
+    echo "FAIL [focus] poller stole focus: anchor=$ANCHOR_PANE active=$POST_ACTIVE" >&2
+    exit 1
+fi
+
+run_toggle "$HOME_SESSION:base"
+wait_for_pane_count "$BASE_WIN" 1 \
+    || { echo "FAIL [focus] unexplode never reduced to 1 pane" >&2; exit 1; }
+echo "PASS [focus] heatmap style application preserves the active pane"
+
+"${TMUX_CMD[@]}" set-option -gu @explode-scope
+"${TMUX_CMD[@]}" set-option -gu @explode-heat-tick

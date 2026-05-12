@@ -132,12 +132,23 @@ while :; do
         # on the same bucket for many ticks doesn't flicker. The marker
         # @heat_style records what we last applied so the comparison
         # survives across ticks.
+        #
+        # `select-pane -P` has a nasty side effect: it also makes the
+        # target pane active, even with -P. Without compensation, every
+        # bucket transition (hot→warm→cool→cold, or any climb back) would
+        # yank focus to whichever tile happened to cross a boundary —
+        # making it impossible to type into one pane while a wall ticks.
+        # Chaining `select-pane -t <active>` back onto the same command
+        # list restores focus in the same atomic tmux command, so the
+        # client never sees the intermediate active state.
+        apply_style="$style"; [[ -z "$apply_style" ]] && apply_style="default"
         prev_style=$(T show-options -pqv -t "$pane_id" "@heat_style" 2>/dev/null) || prev_style=""
         if [[ "$prev_style" != "$style" ]]; then
-            if [[ -n "$style" ]]; then
-                T select-pane -t "$pane_id" -P "$style" 2>/dev/null || true
+            active=$(T display-message -p -t "$WIN_ID" '#{pane_id}' 2>/dev/null) || active=""
+            if [[ -z "$active" || "$active" == "$pane_id" ]]; then
+                T select-pane -t "$pane_id" -P "$apply_style" 2>/dev/null || true
             else
-                T select-pane -t "$pane_id" -P "default" 2>/dev/null || true
+                T select-pane -t "$pane_id" -P "$apply_style" \; select-pane -t "$active" 2>/dev/null || true
             fi
             T set-option -p -t "$pane_id" "@heat_style" "$style" 2>/dev/null || true
         fi
