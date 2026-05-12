@@ -1,3 +1,9 @@
+## [1.0.5](https://github.com/wbern/tmux-explode/compare/v1.0.4...v1.0.5) (2026-05-12)
+
+### Bug Fixes
+
+* **heatmap:** preserve active pane across bucket-style application ([d0302a2](https://github.com/wbern/tmux-explode/commit/d0302a2db50c0483322116916623b605e64dbdb8))
+
 ## [1.0.4](https://github.com/wbern/tmux-explode/compare/v1.0.3...v1.0.4) (2026-05-07)
 
 ### Bug Fixes
