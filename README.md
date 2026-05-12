@@ -83,6 +83,7 @@ re-sourcing `tmux.conf`.
 | `@explode-dim-cold`      | `on`        | When `on`, the heatmap poller also dims the `pane-style` of cool (💤) and cold (❄) tiles so your eye skips quiet panes. Apps that emit explicit ANSI colors override the dim default — the effect is strongest on uncolored content. Set to `off` to keep the bucket glyph but leave tile colors untouched. Requires `@explode-heatmap` on. |
 | `@explode-style-cool`    | `bg=#0a0a18` | Per-pane style applied to 💤 (cool) tiles via `select-pane -P`. Defaults to a faint navy bg — `fg=` overrides only show through on uncolored cells (rare on TUI walls), and on dark terminals you can't make a tile recede via contrast (no color is darker than #000). A faint blue *hue* reads semantically as "asleep" without screaming for attention. Hex values bypass terminal palette remapping. |
 | `@explode-style-cold`    | `bg=#10102a` | Same idea as cool, slightly more saturated so cold tiles read as "more parked" than cool ones. |
+| `@explode-close-key`     | `X`         | Key bound under `prefix` while a wall is up to kill the focused tile and re-tile. The binding is installed on explode and removed on toggle-off; any pre-existing binding for the same key is saved and restored, so your normal tmux setup is left untouched outside the wall. Refuses to close the anchor (kill anchor and the wall has no return point — use the toggle to unexplode instead). Default `X` is unbound in vanilla tmux. Set to `off` to opt out entirely. |
 
 Example:
 
@@ -127,6 +128,29 @@ set -g @explode-window-name 'glance'
 - Automated visual snapshot tests run in CI against tmux **3.3a, 3.4,
   3.5a, and 3.6a** (covers Debian 12, Ubuntu 24.04 LTS, and current
   upstream); the same suite is run manually on macOS Homebrew tmux 3.6a.
+
+### Closing a single tile
+
+Two ways to remove a tile while a wall is up:
+
+- **`prefix X`** (capital, while a wall is up) — kills the focused tile and
+  re-tiles in one keystroke. Refuses to close the anchor (toggle off
+  instead). The key is configurable via `@explode-close-key`; set to
+  `off` to disable the binding.
+- **`prefix x`** (lowercase, tmux's built-in kill-pane) — works from any
+  tile, but asks "kill-pane #N? (y/n)" and doesn't re-tile.
+
+What killing a tile actually does depends on its border color:
+
+| Label color | What it is | What `prefix x` / `prefix X` kills |
+| --- | --- | --- |
+| Magenta `⇄ <session>` | Nested attach into a sibling session | Only the attach process — the sibling session and everything in it keeps running |
+| Cyan `◫ <window>` | A real pane gathered from another window of the current session via `join-pane` | The pane and whatever it was running |
+| Yellow `◉ here` | The anchor pane (where the toggle fired from) | `prefix X` refuses; `prefix x` would kill your starting shell, so use the toggle to unexplode instead |
+
+The asymmetry is because magenta tiles are *viewports* (the inner content
+is rendered through a `tmux attach` client), while cyan/yellow tiles are
+*the actual pane*. Glance at the border color before swinging the axe.
 
 ### In-place wall notes (`all` and `server` scopes)
 

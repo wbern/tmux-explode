@@ -1562,6 +1562,98 @@ echo "PASS [dim-cleanup] $DIM_CYCLES toggle cycles, anchor stayed default after 
 "${TMUX_CMD[@]}" set-option -gu @explode-heat-tick
 
 # ---------------------------------------------------------------------------
+# Scenario 18.5: close-tile binding — fast wall-time `prefix X` (or
+# whatever @explode-close-key resolves to) kills the focused tile,
+# refuses the anchor, re-tiles, save/restores any pre-existing user
+# binding, and respects the `off` opt-out.
+#
+# The binding's run-shell receives the firing pane id via tmux's
+# `#{pane_id}` format substitution; we mimic that by calling the script
+# with an explicit pane arg here, which is exactly what the binding
+# string expands to at key-press time.
+# ---------------------------------------------------------------------------
+cleanup
+"${TMUX_CMD[@]}" new-session -d -s "$HOME_SESSION" -n base -x 120 -y 40
+label_pane "$HOME_SESSION:base.0" "HOME"
+"${TMUX_CMD[@]}" new-session -d -s "ctsib1" -n w -x 120 -y 40
+label_pane "ctsib1:w.0" "CTSIB1"
+"${TMUX_CMD[@]}" new-session -d -s "ctsib2" -n w -x 120 -y 40
+label_pane "ctsib2:w.0" "CTSIB2"
+wait_for_markers "$HOME_SESSION" 1
+wait_for_markers "ctsib1" 1
+wait_for_markers "ctsib2" 1
+
+# Pre-existing user binding must be preserved across the wall lifecycle.
+"${TMUX_CMD[@]}" bind-key -T prefix X display-message "user_binding_X"
+USER_BINDING=$("${TMUX_CMD[@]}" list-keys -T prefix X)
+
+"${TMUX_CMD[@]}" set-option -g @explode-scope server
+"${TMUX_CMD[@]}" set-option -g @explode-heatmap off
+
+run_toggle "$HOME_SESSION:base"
+BASE_WIN=$("${TMUX_CMD[@]}" display-message -p -t "$HOME_SESSION:base" '#{window_id}')
+wait_for_pane_count "$BASE_WIN" 3 \
+    || { echo "FAIL [close-tile] wall never reached 3 panes" >&2; exit 1; }
+
+INSTALLED=$("${TMUX_CMD[@]}" list-keys -T prefix X 2>/dev/null || true)
+if [[ "$INSTALLED" != *"close_tile.sh"* ]]; then
+    echo "FAIL [close-tile] binding not installed while wall is up: $INSTALLED" >&2
+    exit 1
+fi
+
+TARGET=$("${TMUX_CMD[@]}" list-panes -t "$BASE_WIN" -F '#{pane_id} #{@orig_session}' \
+    | awk '$2!="" {print $1; exit}')
+ANCHOR=$("${TMUX_CMD[@]}" list-panes -t "$BASE_WIN" -F '#{pane_id} #{@orig_session}#{@orig_window}' \
+    | awk '$2=="" {print $1; exit}')
+
+"${TMUX_CMD[@]}" run-shell "$REPO_ROOT/scripts/close_tile.sh $TARGET"
+wait_for_pane_count "$BASE_WIN" 2 \
+    || { echo "FAIL [close-tile] non-anchor close did not reduce pane count" >&2; exit 1; }
+
+"${TMUX_CMD[@]}" run-shell "$REPO_ROOT/scripts/close_tile.sh $ANCHOR"
+sleep 0.2
+POST=$("${TMUX_CMD[@]}" list-panes -t "$BASE_WIN" -F '#{pane_id}' | grep -c "^${ANCHOR}\$" || true)
+if [[ "$POST" != "1" ]]; then
+    echo "FAIL [close-tile] anchor was killed: anchor=$ANCHOR post-count=$POST" >&2
+    exit 1
+fi
+echo "PASS [close-tile] anchor refusal honored"
+
+run_toggle "$HOME_SESSION:base"
+wait_for_pane_count "$BASE_WIN" 1 \
+    || { echo "FAIL [close-tile] unexplode never reduced to 1 pane" >&2; exit 1; }
+
+RESTORED=$("${TMUX_CMD[@]}" list-keys -T prefix X 2>/dev/null || true)
+if [[ "$RESTORED" != "$USER_BINDING" ]]; then
+    echo "FAIL [close-tile] user binding not restored: want '$USER_BINDING' got '$RESTORED'" >&2
+    exit 1
+fi
+echo "PASS [close-tile] pre-existing user binding restored after teardown"
+
+# Opt-out: with @explode-close-key=off the binding must not be installed.
+# Clear the user binding first so we can distinguish "not installed" from
+# "user binding still in place".
+"${TMUX_CMD[@]}" unbind-key -T prefix X
+"${TMUX_CMD[@]}" set-option -g @explode-close-key off
+
+run_toggle "$HOME_SESSION:base"
+wait_for_pane_count "$BASE_WIN" 3 \
+    || { echo "FAIL [close-tile] opt-out wall never reached 3 panes" >&2; exit 1; }
+OPTOUT=$("${TMUX_CMD[@]}" list-keys -T prefix X 2>&1 || true)
+if [[ "$OPTOUT" != *"unknown key"* && "$OPTOUT" != "" ]]; then
+    echo "FAIL [close-tile] binding installed despite opt-out: $OPTOUT" >&2
+    exit 1
+fi
+echo "PASS [close-tile] @explode-close-key=off opts out cleanly"
+
+run_toggle "$HOME_SESSION:base"
+wait_for_pane_count "$BASE_WIN" 1 || true
+
+"${TMUX_CMD[@]}" set-option -gu @explode-scope
+"${TMUX_CMD[@]}" set-option -gu @explode-heatmap
+"${TMUX_CMD[@]}" set-option -gu @explode-close-key
+
+# ---------------------------------------------------------------------------
 # Scenario 19: focus preservation — heatmap poller must NOT steal focus
 # when it applies a bucket-transition style to a non-active tile.
 #

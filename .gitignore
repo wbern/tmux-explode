@@ -1,6 +1,12 @@
 .DS_Store
 *.swp
 
+# asciinema recordings produced by tests/record_demo.sh. The rendered
+# docs/*.gif under version control is the artifact users see; the .cast
+# is a 1-2MB intermediate that gets regenerated whenever a demo is
+# re-recorded.
+tests/*.cast
+
 # semantic-release toolchain is installed in CI from the committed
 # package-lock.json; node_modules/ never belongs in the repo.
 node_modules/
