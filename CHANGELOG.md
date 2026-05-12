@@ -1,3 +1,9 @@
+## [1.1.0](https://github.com/wbern/tmux-explode/compare/v1.0.5...v1.1.0) (2026-05-12)
+
+### Features
+
+* prefix X to fast-close a tile while a wall is up ([0334bf8](https://github.com/wbern/tmux-explode/commit/0334bf8608668e9169a5a59b15a0db6f26ac2519))
+
 ## [1.0.5](https://github.com/wbern/tmux-explode/compare/v1.0.4...v1.0.5) (2026-05-12)
 
 ### Bug Fixes
