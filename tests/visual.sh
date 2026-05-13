@@ -1600,6 +1600,14 @@ if [[ "$INSTALLED" != *"close_tile.sh"* ]]; then
     echo "FAIL [close-tile] binding not installed while wall is up: $INSTALLED" >&2
     exit 1
 fi
+# The binding must carry the literal #{pane_id} format token so tmux
+# expands it at key-press time. Without it, close_tile.sh would have to
+# fall back to display-message, which drifts across sessions when no
+# client is attached — exactly the multi-session wall configuration.
+if [[ "$INSTALLED" != *'#{pane_id}'* ]]; then
+    echo "FAIL [close-tile] binding missing #{pane_id} substitution: $INSTALLED" >&2
+    exit 1
+fi
 
 TARGET=$("${TMUX_CMD[@]}" list-panes -t "$BASE_WIN" -F '#{pane_id} #{@orig_session}' \
     | awk '$2!="" {print $1; exit}')

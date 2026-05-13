@@ -42,6 +42,40 @@ if [[ -z "$orig_window" && -z "$orig_session" ]]; then
     exit 0
 fi
 
+# Magenta `⇄ <session>` tiles stashed the inner session's pre-wall
+# `status` and `window-size` on this pane when the wall was built; the
+# full unexplode loop reads those stashes and restores them BEFORE
+# killing the attach (overview_toggle.sh:683-693). We have to mirror
+# that here — once the pane is gone, the stash is unreachable, and the
+# next toggle-off loop never touches the orphaned inner session.
+# Without this, killing a single magenta tile would leave the inner
+# session with `status off` and `window-size smallest`, breaking later
+# attaches.
+if [[ -n "$orig_session" ]]; then
+    saved_status=$(tmux show-options -pqv -t "$active_pane" "@orig_session_status" 2>/dev/null || true)
+    saved_ws=$(tmux show-options -pqv -t "$active_pane" "@orig_session_window_size" 2>/dev/null || true)
+    if [[ "$saved_status" == "unset" ]]; then
+        tmux set-option -u -t "$orig_session" status 2>/dev/null || true
+    elif [[ "$saved_status" == set:* ]]; then
+        tmux set-option -t "$orig_session" status "${saved_status#set:}" 2>/dev/null || true
+    fi
+    if [[ "$saved_ws" == "unset" ]]; then
+        tmux set-option -u -t "$orig_session" window-size 2>/dev/null || true
+    elif [[ "$saved_ws" == set:* ]]; then
+        tmux set-option -t "$orig_session" window-size "${saved_ws#set:}" 2>/dev/null || true
+    fi
+    # Cross-cycle heatmap stash: persist this tile's last-change so the
+    # next explode against the same session shows the correct bucket
+    # instead of restarting from ⚪. Same validation rules as the
+    # toggle's full-unexplode loop (digits only, not in the future).
+    last_change=$(tmux show-options -pqv -t "$active_pane" "@pane_last_change" 2>/dev/null || true)
+    now_ts=$(date +%s)
+    if [[ -n "$last_change" && "$last_change" =~ ^[0-9]+$ ]] \
+       && (( last_change > 0 && last_change <= now_ts )); then
+        tmux set-option -t "$orig_session" "@explode_last_change" "$last_change" 2>/dev/null || true
+    fi
+fi
+
 tmux kill-pane -t "$active_pane" 2>/dev/null || true
 
 # Re-tile only if any panes remain — killing the last non-anchor leaves
@@ -58,6 +92,11 @@ if [[ "$layout_style" == "tiled" ]]; then
     tmux select-layout -t "$active_win" tiled 2>/dev/null || true
     exit 0
 fi
+
+# Honour the user's column-bias knobs on the re-tile so a wall with a
+# customized @explode-min-pane-width / @explode-target-aspect doesn't
+# silently fall back to build_layout's defaults after a close.
+prepare_explode_layout_env
 
 sx=$(tmux display-message -p -t "$active_win" '#{window_width}' 2>/dev/null || true)
 sy=$(tmux display-message -p -t "$active_win" '#{window_height}' 2>/dev/null || true)

@@ -131,12 +131,17 @@ set -g @explode-window-name 'glance'
 
 ### Closing a single tile
 
+(Applies to **in-place walls** — i.e. `@explode-scope` `all` or `server`.
+The `session` scope builds a dedicated window of duplicates and isn't
+covered here.)
+
 Two ways to remove a tile while a wall is up:
 
 - **`prefix X`** (capital, while a wall is up) — kills the focused tile and
   re-tiles in one keystroke. Refuses to close the anchor (toggle off
-  instead). The key is configurable via `@explode-close-key`; set to
-  `off` to disable the binding.
+  instead). The key is configurable via `@explode-close-key`; set the
+  literal string `off` to disable the binding (empty string falls back
+  to the default).
 - **`prefix x`** (lowercase, tmux's built-in kill-pane) — works from any
   tile, but asks "kill-pane #N? (y/n)" and doesn't re-tile.
 

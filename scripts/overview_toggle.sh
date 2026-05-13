@@ -31,37 +31,11 @@ OVERVIEW=$(get_tmux_option "@explode-window-name" "overview")
 MODE=$(get_tmux_option "@explode-mode" "active")
 SCOPE=$(get_tmux_option "@explode-scope" "all")
 
-# Column-bias knobs read by build_layout via the environment. Empty values
-# leave build_layout's own defaults in effect (40 cells, aspect 0.5). The
-# user-facing aspect option takes a decimal like `0.5`; bash arithmetic
-# can't multiply floats so we convert to tenths via awk and pass that to
-# build_layout as EXPLODE_TARGET_ASPECT_X10.
-#
-# Both values are validated against strict numeric regexes before being
-# exported. Bash arithmetic context (used downstream in build_layout) does
-# recursive variable resolution — an unvalidated value like
-# `a[$(rm -rf /tmp/x)]` would trigger command substitution at every
-# `(( min_w < 1 ))` site. The validation here is the first line of defense;
-# build_layout adds a second.
-_min_w=$(get_tmux_option "@explode-min-pane-width" "")
-_aspect=$(get_tmux_option "@explode-target-aspect" "")
-if [[ -n "$_min_w" ]]; then
-    if [[ "$_min_w" =~ ^[0-9]+$ ]]; then
-        export EXPLODE_MIN_PANE_WIDTH="$_min_w"
-    else
-        tmux display-message "tmux_explode: ignoring malformed @explode-min-pane-width"
-    fi
-fi
-if [[ -n "$_aspect" ]]; then
-    if [[ "$_aspect" =~ ^[0-9]*\.?[0-9]+$ ]]; then
-        _x10=$(awk -v v="$_aspect" 'BEGIN { printf "%d", v*10 + 0.5 }')
-        export EXPLODE_TARGET_ASPECT_X10="$_x10"
-        unset _x10
-    else
-        tmux display-message "tmux_explode: ignoring malformed @explode-target-aspect"
-    fi
-fi
-unset _min_w _aspect
+# Column-bias knobs read by build_layout via the environment. The
+# validation lives in build_layout.sh so close_tile.sh can reuse it for
+# the re-tile after a single-tile close — empty values leave
+# build_layout's own defaults (40 cells, aspect 0.5) in effect.
+prepare_explode_layout_env
 
 # tmux propagates the calling pane's context via run-shell, so plain
 # display-message with no -t reads from the keybinding's source pane, not from

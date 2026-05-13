@@ -141,7 +141,7 @@ while :; do
         # Chaining `select-pane -t <active>` back onto the same command
         # list restores focus in the same atomic tmux command, so the
         # client never sees the intermediate active state.
-        apply_style="$style"; [[ -z "$apply_style" ]] && apply_style="default"
+        apply_style="${style:-default}"
         prev_style=$(T show-options -pqv -t "$pane_id" "@heat_style" 2>/dev/null) || prev_style=""
         if [[ "$prev_style" != "$style" ]]; then
             active=$(T display-message -p -t "$WIN_ID" '#{pane_id}' 2>/dev/null) || active=""

@@ -15,6 +15,37 @@
 
 set -euo pipefail
 
+# Validate the two user-facing layout knobs (@explode-min-pane-width,
+# @explode-target-aspect) and export them as EXPLODE_MIN_PANE_WIDTH and
+# EXPLODE_TARGET_ASPECT_X10 for build_layout to consume. Shared between
+# the toggle (initial wall build) and close_tile.sh (re-tile after a
+# single-tile close) so both honour user configuration consistently.
+#
+# Strict regex validation guards against bash-arithmetic command
+# substitution — see build_layout's caller comment for the threat model.
+# Malformed values fall through with a status-bar warning rather than
+# raising an error, matching the toggle's original behavior.
+prepare_explode_layout_env() {
+    local min_w aspect x10
+    min_w=$(tmux show-option -gqv "@explode-min-pane-width" 2>/dev/null || true)
+    aspect=$(tmux show-option -gqv "@explode-target-aspect" 2>/dev/null || true)
+    if [[ -n "$min_w" ]]; then
+        if [[ "$min_w" =~ ^[0-9]+$ ]]; then
+            export EXPLODE_MIN_PANE_WIDTH="$min_w"
+        else
+            tmux display-message "tmux_explode: ignoring malformed @explode-min-pane-width" 2>/dev/null || true
+        fi
+    fi
+    if [[ -n "$aspect" ]]; then
+        if [[ "$aspect" =~ ^[0-9]*\.?[0-9]+$ ]]; then
+            x10=$(awk -v v="$aspect" 'BEGIN { printf "%d", v*10 + 0.5 }')
+            export EXPLODE_TARGET_ASPECT_X10="$x10"
+        else
+            tmux display-message "tmux_explode: ignoring malformed @explode-target-aspect" 2>/dev/null || true
+        fi
+    fi
+}
+
 tmux_layout_checksum() {
     local s="$1" csum=0 i c _o
     local saved_lc="${LC_CTYPE:-}"
