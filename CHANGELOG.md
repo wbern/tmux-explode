@@ -1,3 +1,9 @@
+## [1.1.1](https://github.com/wbern/tmux-explode/compare/v1.1.0...v1.1.1) (2026-05-13)
+
+### Bug Fixes
+
+* **close-tile:** restore inner-session state and honour layout config ([839f8f4](https://github.com/wbern/tmux-explode/commit/839f8f4ec524ff53eee30634eb73f48a721458f8))
+
 ## [1.1.0](https://github.com/wbern/tmux-explode/compare/v1.0.5...v1.1.0) (2026-05-12)
 
 ### Features
