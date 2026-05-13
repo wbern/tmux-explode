@@ -1,3 +1,13 @@
+## [2.0.0](https://github.com/wbern/tmux-explode/compare/v1.1.1...v2.0.0) (2026-05-13)
+
+### ⚠ BREAKING CHANGES
+
+* **close-tile:** drop auto-binding, document close_tile.sh as user-configurable
+
+### Features
+
+* **close-tile:** drop auto-binding, document close_tile.sh as user-configurable ([5680647](https://github.com/wbern/tmux-explode/commit/56806479504801c3cb840f59bff10388ab68b072))
+
 ## [1.1.1](https://github.com/wbern/tmux-explode/compare/v1.1.0...v1.1.1) (2026-05-13)
 
 ### Bug Fixes
