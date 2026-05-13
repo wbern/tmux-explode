@@ -303,57 +303,6 @@ setup_wall_borders() {
     tmux set-option -w -t "$CURRENT_WIN" pane-border-format "$WALL_BORDER_FORMAT"
 
     start_heatmap_poller
-    install_close_binding
-}
-
-# Bind a one-shot close key while the wall is up: kills the focused tile
-# (refusing the anchor) and re-tiles. Vanilla tmux leaves capital `X`
-# unbound, so the default is non-intrusive — but if the user already has
-# a binding for the chosen key we save it via `list-keys` and restore on
-# teardown via `source-file`. Empty key = opt-out entirely.
-install_close_binding() {
-    local key
-    key=$(get_tmux_option "@explode-close-key" "X")
-    # get_tmux_option swallows empty values back into the default, so the
-    # opt-out sentinel is the literal string `off`. Documented in README.
-    [[ -z "$key" || "$key" == "off" ]] && return 0
-
-    local saved
-    saved=$(tmux list-keys -T prefix "$key" 2>/dev/null || true)
-    if [[ -n "$saved" ]]; then
-        local restore_dir restore_path
-        restore_dir="${TMPDIR:-/tmp}/tmux-explode-$$"
-        mkdir -p "$restore_dir" 2>/dev/null || return 0
-        restore_path="$restore_dir/restore-close-${CURRENT_WIN//[^a-zA-Z0-9]/_}.tmux"
-        printf '%s\n' "$saved" > "$restore_path" || return 0
-        tmux set-option -w -t "$CURRENT_WIN" "@explode_saved_close_binding_path" "$restore_path"
-    fi
-    tmux set-option -w -t "$CURRENT_WIN" "@explode_close_key" "$key"
-
-    local script
-    script="$(dirname "${BASH_SOURCE[0]}")/close_tile.sh"
-    # tmux expands #{pane_id} against the firing pane at key-press time,
-    # which sidesteps display-message's flaky default-target resolution
-    # inside the script (drifts across sibling sessions on a server with
-    # no attached client, which is exactly the wall's normal state).
-    tmux bind-key -T prefix "$key" run-shell "$script '#{pane_id}'" 2>/dev/null || true
-}
-
-restore_close_binding() {
-    local key
-    key=$(tmux show-options -wqv -t "$CURRENT_WIN" "@explode_close_key" 2>/dev/null || true)
-    [[ -z "$key" ]] && return 0
-
-    tmux unbind-key -T prefix "$key" 2>/dev/null || true
-
-    local path
-    path=$(tmux show-options -wqv -t "$CURRENT_WIN" "@explode_saved_close_binding_path" 2>/dev/null || true)
-    if [[ -n "$path" && -f "$path" ]]; then
-        tmux source-file "$path" 2>/dev/null || true
-        rm -f "$path" 2>/dev/null || true
-    fi
-    tmux set-option -w -u -t "$CURRENT_WIN" "@explode_close_key" 2>/dev/null || true
-    tmux set-option -w -u -t "$CURRENT_WIN" "@explode_saved_close_binding_path" 2>/dev/null || true
 }
 
 # Spawn the per-pane activity heatmap poller and stash its PID on the
@@ -444,7 +393,6 @@ teardown_wall_borders() {
     # can't race with the unset and re-set @heat on a pane that's about to
     # be broken/joined back to its origin window.
     stop_heatmap_poller
-    restore_close_binding
 
     local saved
     saved=$(tmux show-options -w -t "$CURRENT_WIN" -v "@explode_saved_border_status" 2>/dev/null || true)
