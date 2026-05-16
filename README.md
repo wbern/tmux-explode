@@ -1,3 +1,5 @@
+<p align="center"><img src="./logo.svg" width="160" alt="tmux-explode logo"></p>
+
 # tmux_explode
 
 [![test](https://github.com/wbern/tmux-explode/actions/workflows/test.yml/badge.svg)](https://github.com/wbern/tmux-explode/actions/workflows/test.yml)
