@@ -1,11 +1,20 @@
-<p align="center"><img src="./logo.svg" width="160" alt="tmux-explode logo"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="./logo-dark.svg">
+    <img src="./logo.svg" width="160" alt="tmux-explode logo">
+  </picture>
+</p>
 
-# tmux_explode
+<h1 align="center">tmux_explode</h1>
 
-[![test](https://github.com/wbern/tmux-explode/actions/workflows/test.yml/badge.svg)](https://github.com/wbern/tmux-explode/actions/workflows/test.yml)
-[![release](https://github.com/wbern/tmux-explode/actions/workflows/release.yml/badge.svg)](https://github.com/wbern/tmux-explode/actions/workflows/release.yml)
-[![GitHub release](https://img.shields.io/github/v/release/wbern/tmux-explode?sort=semver)](https://github.com/wbern/tmux-explode/releases)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+<p align="center">Explode all tmux windows into a single tiled view — then snap them back.</p>
+
+<p align="center">
+  <a href="https://github.com/wbern/tmux-explode/actions/workflows/test.yml"><img src="https://github.com/wbern/tmux-explode/actions/workflows/test.yml/badge.svg" alt="test"></a>
+  <a href="https://github.com/wbern/tmux-explode/actions/workflows/release.yml"><img src="https://github.com/wbern/tmux-explode/actions/workflows/release.yml/badge.svg" alt="release"></a>
+  <a href="https://github.com/wbern/tmux-explode/releases"><img src="https://img.shields.io/github/v/release/wbern/tmux-explode?sort=semver" alt="GitHub release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
+</p>
 
 A tmux plugin that "explodes" every tmux window into a single tiled overview
 window of split panes, then "unexplodes" them back to their original windows.
