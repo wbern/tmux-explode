@@ -13,7 +13,11 @@
   <a href="https://github.com/wbern/tmux-explode/actions/workflows/test.yml"><img src="https://github.com/wbern/tmux-explode/actions/workflows/test.yml/badge.svg" alt="test"></a>
   <a href="https://github.com/wbern/tmux-explode/actions/workflows/release.yml"><img src="https://github.com/wbern/tmux-explode/actions/workflows/release.yml/badge.svg" alt="release"></a>
   <a href="https://github.com/wbern/tmux-explode/releases"><img src="https://img.shields.io/github/v/release/wbern/tmux-explode?sort=semver" alt="GitHub release"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
+  <br>
+  <a href="https://claude.ai/code"><img src="https://img.shields.io/badge/Made%20with-Claude%20Code-blueviolet" alt="Made with Claude Code"></a>
+  <a href="https://github.com/wbern/tmux-explode/graphs/contributors"><img src="https://img.shields.io/github/contributors/wbern/tmux-explode" alt="Contributors"></a>
+  <a href="https://github.com/wbern/tmux-explode/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs Welcome"></a>
 </p>
 
 A tmux plugin that "explodes" every tmux window into a single tiled overview
