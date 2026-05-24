@@ -31,7 +31,11 @@ get_tmux_option() {
 OVERVIEW=$(get_tmux_option "@explode-window-name" "overview")
 MODE=$(get_tmux_option "@explode-mode" "active")
 SCOPE=$(get_tmux_option "@explode-scope" "all")
-ONLY_ATTACHED=$(get_tmux_option "@explode-only-attached" "off")
+# ONLY_ATTACHED_OVERRIDE lets a secondary key binding (e.g. the one
+# installed via @explode-key-attached) flip the filter on for one
+# invocation without mutating the user's global option — so regular
+# `prefix + O` still respects whatever they've configured.
+ONLY_ATTACHED=${ONLY_ATTACHED_OVERRIDE:-$(get_tmux_option "@explode-only-attached" "off")}
 
 # Column-bias knobs read by build_layout via the environment. The
 # validation lives in build_layout.sh so close_tile.sh can reuse it for

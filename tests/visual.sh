@@ -1886,3 +1886,68 @@ echo "PASS [only-attached none] no wall built when zero siblings are attached"
 
 "${TMUX_CMD[@]}" set-option -gu @explode-scope
 "${TMUX_CMD[@]}" set-option -gu @explode-only-attached
+
+# ---------------------------------------------------------------------------
+# Scenario: ONLY_ATTACHED_OVERRIDE env var flips the filter for one
+# invocation without touching the global option (this is how the secondary
+# key binding @explode-key-attached works).
+# ---------------------------------------------------------------------------
+cleanup
+"${TMUX_CMD[@]}" new-session -d -s "$HOME_SESSION" -n base -x 120 -y 40
+label_pane "$HOME_SESSION:base.0" "HOME"
+"${TMUX_CMD[@]}" new-session -d -s "sib1" -n w1 -x 120 -y 40
+label_pane "sib1:w1.0" "SIB1"
+"${TMUX_CMD[@]}" new-session -d -s "sib2" -n w2 -x 120 -y 40
+label_pane "sib2:w2.0" "SIB2"
+wait_for_markers "$HOME_SESSION" 1
+wait_for_markers "sib1" 1
+wait_for_markers "sib2" 1
+
+"${TMUX_CMD[@]}" new-session -d -s "watcher" -n w -x 120 -y 40 \
+    "unset TMUX; exec tmux -L \"$SOCKET\" attach -t sib1"
+
+deadline=$((SECONDS + 5))
+attached=0
+while (( SECONDS < deadline )); do
+    attached=$("${TMUX_CMD[@]}" display-message -p -t sib1 '#{session_attached}')
+    (( attached > 0 )) && break
+    sleep 0.1
+done
+if (( attached == 0 )); then
+    echo "FAIL [only-attached override] watcher never attached to sib1" >&2
+    exit 1
+fi
+
+BASE_WIN=$("${TMUX_CMD[@]}" display-message -p -t "$HOME_SESSION:base" '#{window_id}')
+
+"${TMUX_CMD[@]}" set-option -g @explode-scope server
+# Deliberately leave @explode-only-attached unset — the env var alone
+# should drive the filter for this invocation.
+"${TMUX_CMD[@]}" run-shell -t "$HOME_SESSION:base" \
+    "ONLY_ATTACHED_OVERRIDE=on $REPO_ROOT/scripts/overview_toggle.sh"
+
+wait_for_pane_count "$BASE_WIN" 2 \
+    || { echo "FAIL [only-attached override] expected 2 panes (anchor + sib1)" >&2; exit 1; }
+
+ORIG_SESSIONS=$("${TMUX_CMD[@]}" list-panes -t "$BASE_WIN" -F '#{@orig_session}' \
+                | grep -v '^$' | sort)
+if [[ "$ORIG_SESSIONS" != "sib1" ]]; then
+    echo "FAIL [only-attached override] env-var override didn't filter to sib1" >&2
+    echo "--- actual" >&2; echo "$ORIG_SESSIONS" >&2
+    exit 1
+fi
+
+# The env var must not have leaked into the global option — verify.
+LEAK=$("${TMUX_CMD[@]}" show-options -gqv @explode-only-attached)
+if [[ -n "$LEAK" ]]; then
+    echo "FAIL [only-attached override] override leaked into global option: '$LEAK'" >&2
+    exit 1
+fi
+echo "PASS [only-attached override] env var filtered wall; global option untouched"
+
+run_toggle "$HOME_SESSION:base"
+wait_for_pane_count "$BASE_WIN" 1 \
+    || { echo "FAIL [only-attached override round-trip] expected 1 pane" >&2; exit 1; }
+echo "PASS [only-attached override round-trip] anchor restored"
+
+"${TMUX_CMD[@]}" set-option -gu @explode-scope
