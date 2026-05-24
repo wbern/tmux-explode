@@ -875,20 +875,19 @@ add_session_attach_pane() {
 
 other_session_names() {
     local s
-    if [[ "$ONLY_ATTACHED" == "on" ]]; then
-        # Filter to sessions with at least one client attached. awk rather
-        # than tmux -f keeps us compatible with tmux 3.0.
-        while IFS= read -r s; do
-            [[ -z "$s" || "$s" == "$SESSION_NAME" ]] && continue
-            printf '%s\n' "$s"
-        done < <(tmux list-sessions -F '#{session_attached}'$'\t''#{session_name}' \
-                 | awk -F'\t' '$1 > 0 { print $2 }')
-    else
-        while IFS= read -r s; do
-            [[ -z "$s" || "$s" == "$SESSION_NAME" ]] && continue
-            printf '%s\n' "$s"
-        done < <(tmux list-sessions -F '#{session_name}')
-    fi
+    while IFS= read -r s; do
+        [[ -z "$s" || "$s" == "$SESSION_NAME" ]] && continue
+        printf '%s\n' "$s"
+    done < <(
+        if [[ "$ONLY_ATTACHED" == "on" ]]; then
+            # awk filter rather than tmux's -f flag — keeps compatibility
+            # with tmux 3.0+ rather than gating on 3.2.
+            tmux list-sessions -F '#{session_attached}'$'\t''#{session_name}' \
+                | awk -F'\t' '$1 > 0 { print $2 }'
+        else
+            tmux list-sessions -F '#{session_name}'
+        fi
+    )
 }
 
 explode_server() {
