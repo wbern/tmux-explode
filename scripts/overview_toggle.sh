@@ -880,8 +880,9 @@ other_session_names() {
         printf '%s\n' "$s"
     done < <(
         if [[ "$ONLY_ATTACHED" == "on" ]]; then
-            # awk filter rather than tmux's -f flag — keeps compatibility
-            # with tmux 3.0+ rather than gating on 3.2.
+            # awk-filter the format output rather than using tmux's -f flag
+            # — `-f` on list-sessions arrived in 3.2 and the rest of this
+            # script doesn't otherwise require it.
             tmux list-sessions -F '#{session_attached}'$'\t''#{session_name}' \
                 | awk -F'\t' '$1 > 0 { print $2 }'
         else

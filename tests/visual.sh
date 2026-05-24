@@ -1756,7 +1756,7 @@ wait_for_pane_count "$BASE_WIN" 1 \
     || { echo "FAIL [only-attached round-trip] expected 1 pane after unexplode" >&2; exit 1; }
 
 REMAINING=$("${TMUX_CMD[@]}" list-sessions -F '#{session_name}' | sort)
-EXPECTED_REMAINING=$(printf 'home\nsib1\nsib2\nsib3\nwatcher\n')
+EXPECTED_REMAINING=$(printf '%s\nsib1\nsib2\nsib3\nwatcher\n' "$HOME_SESSION" | sort)
 if [[ "$REMAINING" != "$EXPECTED_REMAINING" ]]; then
     echo "FAIL [only-attached round-trip] sessions changed after unexplode" >&2
     echo "--- expected" >&2; echo "$EXPECTED_REMAINING" >&2
@@ -1826,6 +1826,63 @@ run_toggle "$HOME_SESSION:base"
 wait_for_pane_count "$BASE_WIN" 1 \
     || { echo "FAIL [only-attached all round-trip] expected 1 pane" >&2; exit 1; }
 echo "PASS [only-attached all round-trip] base window restored"
+
+"${TMUX_CMD[@]}" set-option -gu @explode-scope
+"${TMUX_CMD[@]}" set-option -gu @explode-only-attached
+
+# ---------------------------------------------------------------------------
+# Scenario: @explode-only-attached + scope=session is a no-op for the filter
+#
+# Session scope never enumerates siblings, so the option must not change
+# behavior — the overview window still gathers the current session's
+# windows. Builds the same topology as scenarios 1/2.
+# ---------------------------------------------------------------------------
+cleanup
+SESSION_ONLY="only_attached_session_scope"
+build_topology "$SESSION_ONLY"
+wait_for_markers "$SESSION_ONLY" 6
+
+"${TMUX_CMD[@]}" set-option -g @explode-scope session
+"${TMUX_CMD[@]}" set-option -g @explode-mode active
+"${TMUX_CMD[@]}" set-option -g @explode-only-attached on
+run_toggle
+OVERVIEW=$(wait_for_window "$SESSION_ONLY" overview) \
+    || { echo "FAIL [only-attached session] no overview window after explode" >&2; exit 1; }
+SNAP=$(snapshot_overview "$OVERVIEW")
+assert_snapshot "only-attached session" "$SNAP" "$FIXTURES/explode_active_4_panes.txt"
+
+"${TMUX_CMD[@]}" set-option -gu @explode-scope
+"${TMUX_CMD[@]}" set-option -gu @explode-mode
+"${TMUX_CMD[@]}" set-option -gu @explode-only-attached
+
+# ---------------------------------------------------------------------------
+# Scenario: @explode-only-attached with zero attached siblings refuses to
+# build a wall, same as the "no siblings exist" case in scenario 5.
+# ---------------------------------------------------------------------------
+cleanup
+"${TMUX_CMD[@]}" new-session -d -s "$HOME_SESSION" -n base -x 120 -y 40
+label_pane "$HOME_SESSION:base.0" "HOME"
+"${TMUX_CMD[@]}" new-session -d -s "sib1" -n w1 -x 120 -y 40
+label_pane "sib1:w1.0" "SIB1"
+"${TMUX_CMD[@]}" new-session -d -s "sib2" -n w2 -x 120 -y 40
+label_pane "sib2:w2.0" "SIB2"
+wait_for_markers "$HOME_SESSION" 1
+wait_for_markers "sib1" 1
+wait_for_markers "sib2" 1
+
+BASE_WIN=$("${TMUX_CMD[@]}" display-message -p -t "$HOME_SESSION:base" '#{window_id}')
+
+"${TMUX_CMD[@]}" set-option -g @explode-scope server
+"${TMUX_CMD[@]}" set-option -g @explode-only-attached on
+run_toggle "$HOME_SESSION:base"
+
+sleep 0.3
+LONE_PANES=$("${TMUX_CMD[@]}" list-panes -t "$BASE_WIN" -F '#{pane_id}' | wc -l | tr -d ' ')
+if (( LONE_PANES != 1 )); then
+    echo "FAIL [only-attached none] base altered when no siblings attached (panes=$LONE_PANES)" >&2
+    exit 1
+fi
+echo "PASS [only-attached none] no wall built when zero siblings are attached"
 
 "${TMUX_CMD[@]}" set-option -gu @explode-scope
 "${TMUX_CMD[@]}" set-option -gu @explode-only-attached
