@@ -102,6 +102,7 @@ re-sourcing `tmux.conf`.
 | `@explode-style-remote` | `fg=magenta` | Style applied to the labels of nested-attach tiles pointing at sibling sessions. In-place walls only. |
 | `@explode-layout`        | `columns`   | `columns` (default) = column-biased custom layout — taller tiles, better for reading streaming output. `tiled` = tmux's built-in tiled layout (the pre-1.x default). |
 | `@explode-min-pane-width` | `40`        | Floor on per-column width (cells) when the layout builder picks a column count. Prevents tiles from getting too narrow to read on ultrawide screens with many panes. Ignored when `@explode-layout = tiled`. |
+| `@explode-min-pane-height` | `10`       | Floor on per-tile content height (cells). When the terminal is too small to fit every candidate at this height, the wall drops the quietest ones (least-recently-active first) and surfaces a one-line status message with the drop count. Mobile/SSH clients with tall narrow screens hit this most often. Lower it (e.g. `5`) to pack more tiles in at the cost of readability; `0` is clamped to `1`. Anchor pane is always kept. |
 | `@explode-target-aspect` | `0.5`       | Target tile aspect ratio (width ÷ height). Default `0.5` = each tile ≈ 2× as tall as wide. Lower = even taller; `1.0` = square; `2.0` = landscape. Ignored when `@explode-layout = tiled`. |
 | `@explode-heatmap`       | `on`        | When `on`, prepends a per-tile activity heatmap glyph (⚪ no observation yet, 🔥 hot, 🌶 warm, 💤 cool, ❄ cold) to each border label so you can glance at the wall and see which agents are producing output now vs. which have gone quiet. Set to `off` to skip the poller and keep borders unchanged. In-place walls only. |
 | `@explode-dim-cold`      | `on`        | When `on`, the heatmap poller also dims the `pane-style` of cool (💤) and cold (❄) tiles so your eye skips quiet panes. Apps that emit explicit ANSI colors override the dim default — the effect is strongest on uncolored content. Set to `off` to keep the bucket glyph but leave tile colors untouched. Requires `@explode-heatmap` on. |
@@ -131,6 +132,13 @@ set -g @explode-key-attached 'M-O'
   cells) so on ultrawide screens with many panes you don't end up with a
   row of unreadable slivers. Set `@explode-layout tiled` to restore the
   old behavior.
+- When the terminal can't fit every candidate at `@explode-min-pane-height`
+  (default 10 content rows per tile), the wall keeps the most-recently-active
+  sessions/panes and drops the rest with a status-line note. Mobile clients
+  and small SSH windows are the usual trigger; raising `@explode-min-pane-height`
+  trades fewer-but-readable tiles for more-but-cramped ones. Dropped
+  panes/sessions are left untouched — they're still alive in their origin
+  window/session, just not pulled onto this wall.
 - Requires bash 4+ (`mapfile`, `declare -A`). Linux distros and Homebrew
   bash are fine; the macOS-stock `/bin/bash` (3.2) is not — install
   `brew install bash` if you're on that.

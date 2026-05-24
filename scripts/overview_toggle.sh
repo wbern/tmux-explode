@@ -193,27 +193,63 @@ explode() {
         tmux select-layout -t "$SESSION:$OVERVIEW" tiled
     }
 
-    local placeholder_killed=0
-    while IFS=$'\t' read -r win_id win_index win_name; do
+    # Gather candidates with their activity stamp so the capacity cap can
+    # drop the quietest panes/windows when the overview window can't fit
+    # everything. Encoded as `<activity>\t<pane_id>\t<win_name>\t<win_id>\t<win_index>`.
+    # tmux doesn't expose a per-pane activity timestamp, so panes inherit
+    # their parent window's `#{window_activity}` — accurate enough since
+    # window activity ticks whenever ANY pane in it produces output.
+    local -a candidates=()
+    local activity win_id win_index win_name pane_ids pane_id
+    while IFS=$'\t' read -r activity win_id win_index win_name; do
         [[ "$win_name" == "$OVERVIEW" ]] && continue
-
-        local pane_ids
+        [[ -z "$activity" || "$activity" == "0" ]] && activity=99999999999999
         if [[ "$MODE" == "all" ]]; then
-            pane_ids=$(tmux list-panes -t "$win_id" -F '#{pane_id}')
+            pane_ids=$(tmux list-panes -t "$win_id" -F '#{pane_id}' 2>/dev/null)
         else
-            pane_ids=$(tmux list-panes -t "$win_id" -F '#{pane_id} #{?pane_active,1,0}' \
+            pane_ids=$(tmux list-panes -t "$win_id" \
+                       -F '#{pane_id} #{?pane_active,1,0}' 2>/dev/null \
                        | awk '$2==1 {print $1}')
         fi
-
         while IFS= read -r pane_id; do
             [[ -z "$pane_id" ]] && continue
-            join_pane_into_overview "$pane_id" "$win_name" "$win_id" "$win_index"
-            if (( placeholder_killed == 0 )) && [[ -n "$placeholder" ]]; then
-                tmux kill-pane -t "$placeholder"
-                placeholder_killed=1
-            fi
+            candidates+=("$activity"$'\t'"$pane_id"$'\t'"$win_name"$'\t'"$win_id"$'\t'"$win_index")
         done <<< "$pane_ids"
-    done < <(tmux list-windows -t "$SESSION" -F '#{window_id}'$'\t''#{window_index}'$'\t''#{window_name}')
+    done < <(tmux list-windows -t "$SESSION" \
+             -F '#{window_activity}'$'\t''#{window_id}'$'\t''#{window_index}'$'\t''#{window_name}')
+
+    if (( ${#candidates[@]} > 0 )); then
+        local sorted
+        sorted=$(printf '%s\n' "${candidates[@]}" | sort -t $'\t' -k1,1rn -k3,3 -k2,2)
+        candidates=()
+        while IFS= read -r line; do
+            candidates+=("$line")
+        done <<< "$sorted"
+    fi
+
+    # The overview window we just created carries the same dims as the
+    # firing client — read them from the new window itself rather than the
+    # CURRENT_WIN we left behind. No anchor reservation here: every tile
+    # in the overview window is gathered, there's no user-shell anchor to
+    # preserve.
+    local cap total
+    cap=$(wall_capacity_for "$SESSION:$OVERVIEW")
+    total=${#candidates[@]}
+    if (( total > cap )); then
+        candidates=("${candidates[@]:0:cap}")
+    fi
+    report_capacity_drop "$total" "${#candidates[@]}"
+
+    local placeholder_killed=0
+    local line
+    for line in "${candidates[@]}"; do
+        IFS=$'\t' read -r _ pane_id win_name win_id win_index <<< "$line"
+        join_pane_into_overview "$pane_id" "$win_name" "$win_id" "$win_index"
+        if (( placeholder_killed == 0 )) && [[ -n "$placeholder" ]]; then
+            tmux kill-pane -t "$placeholder"
+            placeholder_killed=1
+        fi
+    done
 
     apply_column_biased_layout "$SESSION:$OVERVIEW"
 }
@@ -877,22 +913,57 @@ add_session_attach_pane() {
     tmux select-layout -t "$CURRENT_WIN" tiled
 }
 
-other_session_names() {
-    local s
-    while IFS= read -r s; do
-        [[ -z "$s" || "$s" == "$SESSION_NAME" ]] && continue
-        printf '%s\n' "$s"
-    done < <(
-        if [[ "$ONLY_ATTACHED" == "on" ]]; then
-            # awk-filter the format output rather than using tmux's -f flag
-            # — `-f` on list-sessions arrived in 3.2 and the rest of this
-            # script doesn't otherwise require it.
-            tmux list-sessions -F '#{session_attached}'$'\t''#{session_name}' \
-                | awk -F'\t' '$1 > 0 { print $2 }'
-        else
-            tmux list-sessions -F '#{session_name}'
-        fi
-    )
+# Lists peer sessions sorted so the most-recently-active land at the top.
+# Used by the capacity cap so when a small client can't fit all sessions on
+# the wall, we drop the quietest ones rather than whatever happened to
+# enumerate last.
+#
+# Sort key is `#{session_activity}` (tmux's per-session last-output
+# timestamp, milliseconds). Sessions with no activity stamp (brand-new
+# sessions tmux hasn't ticked yet) get bumped to the top — matches the
+# heatmap's first-sight bias and avoids penalizing a session the user just
+# spawned. Stable secondary sort on the name so the wall ordering doesn't
+# shuffle between toggles when activity is tied.
+#
+# ONLY_ATTACHED is a script-controlled toggle (not user-supplied), so the
+# shell substitution into the awk program is safe.
+other_session_names_by_activity() {
+    local attached_filter='1'
+    [[ "$ONLY_ATTACHED" == "on" ]] && attached_filter='$3 > 0'
+    tmux list-sessions \
+        -F '#{session_activity}'$'\t''#{session_name}'$'\t''#{session_attached}' \
+        | awk -F'\t' -v me="$SESSION_NAME" '
+            $2 == me { next }
+            !( '"$attached_filter"' ) { next }
+            { act = $1; if (act == "" || act == "0") act = "99999999999999"
+              printf "%s\t%s\n", act, $2 }
+        ' | sort -t $'\t' -k1,1rn -k2,2 | awk -F'\t' '{ print $2 }'
+}
+
+# Capacity cap: returns max tiles the wall can hold given window dims and
+# the user's @explode-min-pane-* knobs. Used by every explode_* scope to
+# slice the candidate list down to what fits — anything truncated still
+# exists, just doesn't get pulled onto the wall this toggle.
+wall_capacity_for() {
+    local target="$1"
+    local sx sy
+    sx=$(tmux display-message -p -t "$target" '#{window_width}' 2>/dev/null || true)
+    sy=$(tmux display-message -p -t "$target" '#{window_height}' 2>/dev/null || true)
+    if [[ -z "$sx" || -z "$sy" ]]; then
+        printf '%d' 1
+        return 0
+    fi
+    compute_max_panes "$sx" "$sy"
+}
+
+# Status surface for capacity drops. Single line, mirrors the existing
+# column-bias fallback channel so users see overflow next to other wall
+# diagnostics. Suppressed when nothing was dropped.
+report_capacity_drop() {
+    local total="$1" kept="$2"
+    local dropped=$(( total - kept ))
+    (( dropped > 0 )) || return 0
+    tmux display-message "tmux_explode: hid $dropped of $total (raise @explode-min-pane-height to show more)"
 }
 
 explode_server() {
@@ -907,12 +978,27 @@ explode_server() {
     local s
     while IFS= read -r s; do
         others+=("$s")
-    done < <(other_session_names)
+    done < <(other_session_names_by_activity)
 
     if (( ${#others[@]} == 0 )); then
         tmux display-message "tmux_explode: no other sessions to explode"
         return 0
     fi
+
+    # Reserve one slot for the anchor pane (the user's current shell that
+    # the wall is being built around). If capacity is below 2 the wall
+    # gets only the anchor — which is still useful: it surfaces the
+    # "raise @explode-min-pane-height" hint and avoids spawning tiles
+    # the user can't read.
+    local cap
+    cap=$(wall_capacity_for "$CURRENT_WIN")
+    local max_others=$(( cap - 1 ))
+    (( max_others < 0 )) && max_others=0
+    local total=${#others[@]}
+    if (( total > max_others )); then
+        others=("${others[@]:0:max_others}")
+    fi
+    report_capacity_drop "$total" "${#others[@]}"
 
     setup_wall_borders
 
@@ -936,53 +1022,80 @@ explode_all() {
     # server is torn down first so this one has clean ground to build on.
     sweep_existing_walls
 
-    # Look ahead — if there are no other windows in this session and no
-    # other sessions on the server, there is nothing to gather. Bail before
-    # we've touched any window options.
-    local has_local=0 win_id win_index win_name s
-    while IFS=$'\t' read -r win_id win_index win_name; do
+    # Gather candidate panes (local windows in this session) and candidate
+    # sessions (every OTHER session on the server) into a single
+    # activity-sorted bag so the capacity cap drops the quietest things
+    # first regardless of whether they're local or remote. Encoding
+    # below uses a leading kind char (W=window, S=session) so the loop
+    # downstream can route each candidate back to the right code path.
+    # tmux doesn't expose per-pane activity, so panes inherit their parent
+    # window's `#{window_activity}` — accurate since window activity ticks
+    # whenever ANY pane produces output. Encoded as
+    # `<activity>\t<kind>\t...` where kind W=local-window-pane, S=remote-session.
+    local -a candidates=()
+    local activity win_id win_index win_name pane_ids pane_id sname
+    while IFS=$'\t' read -r activity win_id win_index win_name; do
         [[ "$win_id" == "$CURRENT_WIN" ]] && continue
-        has_local=1
-        break
-    done < <(tmux list-windows -t "$SESSION" -F '#{window_id}'$'\t''#{window_index}'$'\t''#{window_name}')
+        [[ -z "$activity" || "$activity" == "0" ]] && activity=99999999999999
+        if [[ "$MODE" == "all" ]]; then
+            pane_ids=$(tmux list-panes -t "$win_id" -F '#{pane_id}' 2>/dev/null)
+        else
+            pane_ids=$(tmux list-panes -t "$win_id" \
+                       -F '#{pane_id} #{?pane_active,1,0}' 2>/dev/null \
+                       | awk '$2==1 {print $1}')
+        fi
+        while IFS= read -r pane_id; do
+            [[ -z "$pane_id" ]] && continue
+            candidates+=("$activity"$'\t'"W"$'\t'"$pane_id"$'\t'"$win_name"$'\t'"$win_id"$'\t'"$win_index")
+        done <<< "$pane_ids"
+    done < <(tmux list-windows -t "$SESSION" \
+             -F '#{window_activity}'$'\t''#{window_id}'$'\t''#{window_index}'$'\t''#{window_name}')
 
-    local has_remote=0
-    while IFS= read -r s; do
-        has_remote=1
-        break
-    done < <(other_session_names)
+    while IFS= read -r sname; do
+        activity=$(tmux display-message -p -t "$sname" '#{session_activity}' 2>/dev/null || true)
+        [[ -z "$activity" || "$activity" == "0" ]] && activity=99999999999999
+        candidates+=("$activity"$'\t'"S"$'\t'"$sname")
+    done < <(other_session_names_by_activity)
 
-    if (( has_local == 0 && has_remote == 0 )); then
+    if (( ${#candidates[@]} == 0 )); then
         tmux display-message "tmux_explode: nothing else on the server to explode"
         return 0
     fi
 
+    # Stable sort by activity desc (newest first), name asc as tiebreak.
+    local sorted
+    sorted=$(printf '%s\n' "${candidates[@]}" | sort -t $'\t' -k1,1rn -k4,4 -k3,3)
+    candidates=()
+    while IFS= read -r line; do
+        candidates+=("$line")
+    done <<< "$sorted"
+
+    local cap max_extras total
+    cap=$(wall_capacity_for "$CURRENT_WIN")
+    max_extras=$(( cap - 1 ))
+    (( max_extras < 0 )) && max_extras=0
+    total=${#candidates[@]}
+    if (( total > max_extras )); then
+        candidates=("${candidates[@]:0:max_extras}")
+    fi
+    report_capacity_drop "$total" "${#candidates[@]}"
+
     setup_wall_borders
 
-    while IFS=$'\t' read -r win_id win_index win_name; do
-        [[ "$win_id" == "$CURRENT_WIN" ]] && continue
-
-        local pane_ids
-        if [[ "$MODE" == "all" ]]; then
-            pane_ids=$(tmux list-panes -t "$win_id" -F '#{pane_id}')
-        else
-            pane_ids=$(tmux list-panes -t "$win_id" -F '#{pane_id} #{?pane_active,1,0}' \
-                       | awk '$2==1 {print $1}')
-        fi
-
-        while IFS= read -r pane_id; do
-            [[ -z "$pane_id" ]] && continue
+    local kind rest
+    for line in "${candidates[@]}"; do
+        IFS=$'\t' read -r _ kind rest <<< "$line"
+        if [[ "$kind" == "W" ]]; then
+            IFS=$'\t' read -r pane_id win_name win_id win_index <<< "$rest"
             tmux set-option -p -t "$pane_id" "@orig_window" "$win_name"
             tmux set-option -p -t "$pane_id" "@orig_window_id" "$win_id"
             tmux set-option -p -t "$pane_id" "@orig_window_index" "$win_index"
             tmux join-pane -s "$pane_id" -t "$CURRENT_WIN"
             tmux select-layout -t "$CURRENT_WIN" tiled
-        done <<< "$pane_ids"
-    done < <(tmux list-windows -t "$SESSION" -F '#{window_id}'$'\t''#{window_index}'$'\t''#{window_name}')
-
-    while IFS= read -r s; do
-        add_session_attach_pane "$s"
-    done < <(other_session_names)
+        else
+            add_session_attach_pane "$rest"
+        fi
+    done
 
     apply_column_biased_layout "$CURRENT_WIN"
 }

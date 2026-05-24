@@ -9,6 +9,10 @@
 #
 # Tunables (env):
 #   EXPLODE_MIN_PANE_WIDTH   default 40   floor on per-column width in cells
+#   EXPLODE_MIN_PANE_HEIGHT  default 10   floor on per-tile height in cells
+#                                         (compute_max_panes uses min_h + 1 to
+#                                         account for pane-border-status top
+#                                         eating one row per tile)
 #   EXPLODE_TARGET_ASPECT_X10 default 5   target cell aspect ratio × 10
 #                                         (5 = 0.5 = each cell ≈ 2× as tall as
 #                                         it is wide; lower = taller cells)
@@ -26,14 +30,22 @@ set -euo pipefail
 # Malformed values fall through with a status-bar warning rather than
 # raising an error, matching the toggle's original behavior.
 prepare_explode_layout_env() {
-    local min_w aspect x10
+    local min_w min_h aspect x10
     min_w=$(tmux show-option -gqv "@explode-min-pane-width" 2>/dev/null || true)
+    min_h=$(tmux show-option -gqv "@explode-min-pane-height" 2>/dev/null || true)
     aspect=$(tmux show-option -gqv "@explode-target-aspect" 2>/dev/null || true)
     if [[ -n "$min_w" ]]; then
         if [[ "$min_w" =~ ^[0-9]+$ ]]; then
             export EXPLODE_MIN_PANE_WIDTH="$min_w"
         else
             tmux display-message "tmux_explode: ignoring malformed @explode-min-pane-width" 2>/dev/null || true
+        fi
+    fi
+    if [[ -n "$min_h" ]]; then
+        if [[ "$min_h" =~ ^[0-9]+$ ]]; then
+            export EXPLODE_MIN_PANE_HEIGHT="$min_h"
+        else
+            tmux display-message "tmux_explode: ignoring malformed @explode-min-pane-height" 2>/dev/null || true
         fi
     fi
     if [[ -n "$aspect" ]]; then
@@ -44,6 +56,27 @@ prepare_explode_layout_env() {
             tmux display-message "tmux_explode: ignoring malformed @explode-target-aspect" 2>/dev/null || true
         fi
     fi
+}
+
+# Maximum tile count that fits a window of sx × sy without any tile falling
+# below min_w cells wide or min_h cells of content tall. Reserves one row
+# per tile for `pane-border-status top` (the wall always sets it), since
+# tmux treats the border row as overhead on top of the pane's sy, not as
+# part of the pane's allocated height. Floors at 1 so the anchor always
+# gets a slot even on a postage-stamp terminal.
+compute_max_panes() {
+    local sx=$1 sy=$2
+    local min_w=${EXPLODE_MIN_PANE_WIDTH:-40}
+    local min_h=${EXPLODE_MIN_PANE_HEIGHT:-10}
+    [[ "$min_w" =~ ^[0-9]+$ ]] || min_w=40
+    [[ "$min_h" =~ ^[0-9]+$ ]] || min_h=10
+    (( min_w < 1 )) && min_w=1
+    (( min_h < 1 )) && min_h=1
+    local cols=$(( sx / min_w ))
+    local rows=$(( sy / (min_h + 1) ))
+    local cap=$(( cols * rows ))
+    (( cap < 1 )) && cap=1
+    printf '%d' "$cap"
 }
 
 tmux_layout_checksum() {
@@ -255,6 +288,27 @@ self_test() {
     run_case "wide-one"      200  50  1
     run_case "tall-monitor"   80  60  6
     run_case "n-equals-k"    200  50  4
+
+    check_cap() {
+        local name="$1" sx="$2" sy="$3" min_w="$4" min_h="$5" want="$6"
+        local got
+        got=$(EXPLODE_MIN_PANE_WIDTH="$min_w" EXPLODE_MIN_PANE_HEIGHT="$min_h" \
+              compute_max_panes "$sx" "$sy")
+        if [[ "$got" != "$want" ]]; then
+            echo "FAIL [cap:$name] sx=$sx sy=$sy min_w=$min_w min_h=$min_h"
+            echo "  want $want, got $got"
+            fail=1
+            return
+        fi
+        echo "PASS [cap:$name] sx=$sx sy=$sy min_w=$min_w min_h=$min_h → $got"
+    }
+
+    check_cap "phone-portrait"     70  50  40 10  4
+    check_cap "phone-tight"        70  50  40  5  8
+    check_cap "desktop-wide"      280  60  40 10  35
+    check_cap "tiny-floor"         10   5  40 10  1
+    check_cap "min-h-larger-sy"    80  20  40 25  1
+    check_cap "validation-fallback" 200 50 "garbage" "junk" 20
 
     if (( fail )); then
         echo "SELF-TEST FAILED"; return 1

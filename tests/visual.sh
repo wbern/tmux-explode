@@ -2000,3 +2000,83 @@ fi
 echo "PASS [key-attached none] sentinel suppressed the secondary binding"
 
 "${TMUX_CMD[@]}" set-option -gu @explode-key-attached
+
+# ---------------------------------------------------------------------------
+# Scenario: capacity cap — narrow window + many sessions should drop the
+# quietest, leaving the active ones on the wall and the dropped ones
+# untouched in their own sessions.
+# ---------------------------------------------------------------------------
+cleanup
+HOME_SESSION="home"
+# 70x24 mimics a phone-class terminal. With @explode-min-pane-height=10
+# (default) the cap computes as floor(70/40) * floor(24/11) = 1 * 2 = 2,
+# so the wall fits anchor + 1 sibling.
+"${TMUX_CMD[@]}" new-session -d -s "$HOME_SESSION" -n base -x 70 -y 24
+label_pane "$HOME_SESSION:base.0" "HOME"
+
+# Build five siblings. Touch them in increasing recency so the activity
+# sort is unambiguous: sib5 is most recent, sib1 oldest.
+for i in 1 2 3 4 5; do
+    "${TMUX_CMD[@]}" new-session -d -s "sib$i" -n "w$i" -x 120 -y 40
+    label_pane "sib$i:w$i.0" "SIB$i"
+    wait_for_markers "sib$i" 1
+    # Force a fresh activity tick on each session in order. sleep is
+    # short — tmux's session_activity is millisecond-resolution, but the
+    # bash `sleep` granularity + send-keys handshake make 0.05s safe.
+    sleep 0.05
+    "${TMUX_CMD[@]}" send-keys -t "sib$i:w$i.0" "" Enter
+done
+wait_for_markers "$HOME_SESSION" 1
+
+BASE_WIN=$("${TMUX_CMD[@]}" display-message -p -t "$HOME_SESSION:base" '#{window_id}')
+
+"${TMUX_CMD[@]}" set-option -g @explode-scope server
+"${TMUX_CMD[@]}" set-option -g @explode-min-pane-height 10
+run_toggle "$HOME_SESSION:base"
+
+# With cap=2, the wall should have anchor + 1 attach pane.
+deadline=$((SECONDS + 5))
+while (( SECONDS < deadline )); do
+    pane_count=$("${TMUX_CMD[@]}" list-panes -t "$BASE_WIN" -F '#{pane_id}' | wc -l | tr -d ' ')
+    (( pane_count >= 2 )) && break
+    sleep 0.1
+done
+if (( pane_count != 2 )); then
+    echo "FAIL [capacity cap] expected 2 panes (anchor + 1 sibling), got $pane_count" >&2
+    "${TMUX_CMD[@]}" list-panes -t "$BASE_WIN" -F '#{pane_id} orig=#{@orig_session}' >&2
+    exit 1
+fi
+
+# The single attached pane should be the MOST-recently-active session
+# (sib5), not whoever happened to enumerate first.
+KEPT=$("${TMUX_CMD[@]}" list-panes -t "$BASE_WIN" -F '#{@orig_session}' | grep -v '^$')
+if [[ "$KEPT" != "sib5" ]]; then
+    echo "FAIL [capacity cap] expected sib5 (most recent) on wall, got '$KEPT'" >&2
+    exit 1
+fi
+
+# The four dropped sessions must still exist — capacity cap doesn't kill.
+REMAINING=$("${TMUX_CMD[@]}" list-sessions -F '#{session_name}' | sort | tr '\n' ' ')
+EXPECTED="home sib1 sib2 sib3 sib4 sib5 "
+if [[ "$REMAINING" != "$EXPECTED" ]]; then
+    echo "FAIL [capacity cap] expected all sessions to survive: '$EXPECTED' got '$REMAINING'" >&2
+    exit 1
+fi
+echo "PASS [capacity cap] narrow wall kept most-active session, dropped others, all sessions alive"
+
+# Round-trip back to base.
+run_toggle "$HOME_SESSION:base"
+deadline=$((SECONDS + 5))
+while (( SECONDS < deadline )); do
+    pane_count=$("${TMUX_CMD[@]}" list-panes -t "$BASE_WIN" -F '#{pane_id}' | wc -l | tr -d ' ')
+    (( pane_count == 1 )) && break
+    sleep 0.1
+done
+if (( pane_count != 1 )); then
+    echo "FAIL [capacity cap round-trip] expected 1 pane after unexplode, got $pane_count" >&2
+    exit 1
+fi
+echo "PASS [capacity cap round-trip] anchor restored, dropped sessions untouched"
+
+"${TMUX_CMD[@]}" set-option -gu @explode-scope
+"${TMUX_CMD[@]}" set-option -gu @explode-min-pane-height
