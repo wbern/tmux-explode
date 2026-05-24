@@ -1686,3 +1686,146 @@ echo "PASS [focus] heatmap style application preserves the active pane"
 
 "${TMUX_CMD[@]}" set-option -gu @explode-scope
 "${TMUX_CMD[@]}" set-option -gu @explode-heat-tick
+
+# ---------------------------------------------------------------------------
+# Scenario: @explode-only-attached restricts the wall to attached siblings
+#
+# Server scope normally pulls in every sibling session. With the filter on,
+# only sessions with at least one client attached are included. A 'watcher'
+# session hosts a nested `tmux attach -t sib1`, giving sib1 session_attached=1
+# without polluting the home window. sib2/sib3/watcher stay detached and must
+# be filtered out — the wall ends up as anchor + sib1 only.
+# ---------------------------------------------------------------------------
+cleanup
+"${TMUX_CMD[@]}" new-session -d -s "$HOME_SESSION" -n base -x 120 -y 40
+label_pane "$HOME_SESSION:base.0" "HOME"
+"${TMUX_CMD[@]}" new-session -d -s "sib1" -n w1 -x 120 -y 40
+label_pane "sib1:w1.0" "SIB1"
+"${TMUX_CMD[@]}" new-session -d -s "sib2" -n w2 -x 120 -y 40
+label_pane "sib2:w2.0" "SIB2"
+"${TMUX_CMD[@]}" new-session -d -s "sib3" -n w3 -x 120 -y 40
+label_pane "sib3:w3.0" "SIB3"
+
+wait_for_markers "$HOME_SESSION" 1
+wait_for_markers "sib1" 1
+wait_for_markers "sib2" 1
+wait_for_markers "sib3" 1
+
+# Spawn a nested tmux attach inside a detached 'watcher' session so sib1
+# gains a real client (session_attached>0) without adding panes to home.
+# The watcher session itself is detached and is filtered out by the option.
+"${TMUX_CMD[@]}" new-session -d -s "watcher" -n w -x 120 -y 40 \
+    "unset TMUX; exec tmux -L \"$SOCKET\" attach -t sib1"
+
+deadline=$((SECONDS + 5))
+attached=0
+while (( SECONDS < deadline )); do
+    attached=$("${TMUX_CMD[@]}" display-message -p -t sib1 '#{session_attached}')
+    (( attached > 0 )) && break
+    sleep 0.1
+done
+if (( attached == 0 )); then
+    echo "FAIL [only-attached] watcher never attached to sib1 (session_attached=0)" >&2
+    exit 1
+fi
+
+BASE_WIN=$("${TMUX_CMD[@]}" display-message -p -t "$HOME_SESSION:base" '#{window_id}')
+
+"${TMUX_CMD[@]}" set-option -g @explode-scope server
+"${TMUX_CMD[@]}" set-option -g @explode-only-attached on
+run_toggle "$HOME_SESSION:base"
+
+wait_for_pane_count "$BASE_WIN" 2 \
+    || { echo "FAIL [only-attached] expected 2 panes (anchor + sib1)" >&2; exit 1; }
+
+ORIG_SESSIONS=$("${TMUX_CMD[@]}" list-panes -t "$BASE_WIN" -F '#{@orig_session}' \
+                | grep -v '^$' | sort)
+EXPECTED_ATTACHED=$(printf 'sib1\n')
+if [[ "$ORIG_SESSIONS" != "$EXPECTED_ATTACHED" ]]; then
+    echo "FAIL [only-attached] wall did not isolate to sib1" >&2
+    echo "--- expected" >&2; echo "$EXPECTED_ATTACHED" >&2
+    echo "--- actual"   >&2; echo "$ORIG_SESSIONS"     >&2
+    exit 1
+fi
+echo "PASS [only-attached] server scope filtered to attached sibling only"
+
+# Round-trip: unexplode drops the wall pane but watcher's client on sib1
+# survives, so all five sessions remain on the server.
+run_toggle "$HOME_SESSION:base"
+wait_for_pane_count "$BASE_WIN" 1 \
+    || { echo "FAIL [only-attached round-trip] expected 1 pane after unexplode" >&2; exit 1; }
+
+REMAINING=$("${TMUX_CMD[@]}" list-sessions -F '#{session_name}' | sort)
+EXPECTED_REMAINING=$(printf 'home\nsib1\nsib2\nsib3\nwatcher\n')
+if [[ "$REMAINING" != "$EXPECTED_REMAINING" ]]; then
+    echo "FAIL [only-attached round-trip] sessions changed after unexplode" >&2
+    echo "--- expected" >&2; echo "$EXPECTED_REMAINING" >&2
+    echo "--- actual"   >&2; echo "$REMAINING"          >&2
+    exit 1
+fi
+echo "PASS [only-attached round-trip] anchor restored, sessions intact"
+
+"${TMUX_CMD[@]}" set-option -gu @explode-scope
+"${TMUX_CMD[@]}" set-option -gu @explode-only-attached
+
+# ---------------------------------------------------------------------------
+# Scenario: @explode-only-attached + @explode-scope all — local windows
+# still gathered, only attached siblings join. Verifies the filter composes
+# with the hybrid scope, not just 'server'.
+# ---------------------------------------------------------------------------
+cleanup
+"${TMUX_CMD[@]}" new-session -d -s "$HOME_SESSION" -n base -x 120 -y 40
+label_pane "$HOME_SESSION:base.0" "HOME"
+"${TMUX_CMD[@]}" new-window -t "$HOME_SESSION:" -n extra
+label_pane "$HOME_SESSION:extra.0" "EXTRA"
+"${TMUX_CMD[@]}" new-session -d -s "sib1" -n w1 -x 120 -y 40
+label_pane "sib1:w1.0" "SIB1"
+"${TMUX_CMD[@]}" new-session -d -s "sib2" -n w2 -x 120 -y 40
+label_pane "sib2:w2.0" "SIB2"
+"${TMUX_CMD[@]}" select-window -t "$HOME_SESSION:base"
+
+wait_for_markers "$HOME_SESSION" 2
+wait_for_markers "sib1" 1
+wait_for_markers "sib2" 1
+
+"${TMUX_CMD[@]}" new-session -d -s "watcher" -n w -x 120 -y 40 \
+    "unset TMUX; exec tmux -L \"$SOCKET\" attach -t sib1"
+
+deadline=$((SECONDS + 5))
+attached=0
+while (( SECONDS < deadline )); do
+    attached=$("${TMUX_CMD[@]}" display-message -p -t sib1 '#{session_attached}')
+    (( attached > 0 )) && break
+    sleep 0.1
+done
+if (( attached == 0 )); then
+    echo "FAIL [only-attached all] watcher never attached to sib1" >&2
+    exit 1
+fi
+
+BASE_WIN=$("${TMUX_CMD[@]}" display-message -p -t "$HOME_SESSION:base" '#{window_id}')
+
+"${TMUX_CMD[@]}" set-option -g @explode-scope all
+"${TMUX_CMD[@]}" set-option -g @explode-only-attached on
+run_toggle "$HOME_SESSION:base"
+
+# Anchor + extra window's active pane + sib1 attach = 3 panes.
+wait_for_pane_count "$BASE_WIN" 3 \
+    || { echo "FAIL [only-attached all] expected 3 panes" >&2; exit 1; }
+
+ORIG_SESSIONS=$("${TMUX_CMD[@]}" list-panes -t "$BASE_WIN" -F '#{@orig_session}' \
+                | grep -v '^$' | sort -u)
+if [[ "$ORIG_SESSIONS" != "sib1" ]]; then
+    echo "FAIL [only-attached all] sibling tile != sib1 only" >&2
+    echo "--- actual" >&2; echo "$ORIG_SESSIONS" >&2
+    exit 1
+fi
+echo "PASS [only-attached all] hybrid scope filtered siblings, kept local windows"
+
+run_toggle "$HOME_SESSION:base"
+wait_for_pane_count "$BASE_WIN" 1 \
+    || { echo "FAIL [only-attached all round-trip] expected 1 pane" >&2; exit 1; }
+echo "PASS [only-attached all round-trip] base window restored"
+
+"${TMUX_CMD[@]}" set-option -gu @explode-scope
+"${TMUX_CMD[@]}" set-option -gu @explode-only-attached
