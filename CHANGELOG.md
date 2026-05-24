@@ -1,3 +1,9 @@
+## [2.2.0](https://github.com/wbern/tmux-explode/compare/v2.1.0...v2.2.0) (2026-05-24)
+
+### Features
+
+* [@explode-key-attached](https://github.com/explode-key-attached) binding for one-shot attached-only walls ([6e3b682](https://github.com/wbern/tmux-explode/commit/6e3b68250c89531e155ae2ad2744b229cc240552))
+
 ## [2.1.0](https://github.com/wbern/tmux-explode/compare/v2.0.0...v2.1.0) (2026-05-24)
 
 ### Features
