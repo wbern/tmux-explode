@@ -1951,3 +1951,52 @@ wait_for_pane_count "$BASE_WIN" 1 \
 echo "PASS [only-attached override round-trip] anchor restored"
 
 "${TMUX_CMD[@]}" set-option -gu @explode-scope
+
+# ---------------------------------------------------------------------------
+# Scenario: tmux_explode.tmux entrypoint binds @explode-key-attached by
+# default. Source the plugin file against a fresh server and verify both
+# `prefix + O` and `prefix + C-o` end up bound to the toggle script. Also
+# confirm the `none` sentinel suppresses the second binding.
+# ---------------------------------------------------------------------------
+cleanup
+"${TMUX_CMD[@]}" new-session -d -s "$HOME_SESSION" -n base -x 120 -y 40
+"${TMUX_CMD[@]}" run-shell "$REPO_ROOT/tmux_explode.tmux"
+
+PRIMARY=$("${TMUX_CMD[@]}" list-keys -T prefix \
+          | grep -F 'overview_toggle.sh' | grep -v ONLY_ATTACHED_OVERRIDE || true)
+if [[ -z "$PRIMARY" ]]; then
+    echo "FAIL [key-attached default] primary @explode-key binding missing" >&2
+    exit 1
+fi
+
+SECONDARY=$("${TMUX_CMD[@]}" list-keys -T prefix \
+            | grep -F 'ONLY_ATTACHED_OVERRIDE=on' || true)
+if [[ -z "$SECONDARY" ]]; then
+    echo "FAIL [key-attached default] C-o binding not installed by default" >&2
+    "${TMUX_CMD[@]}" list-keys -T prefix >&2
+    exit 1
+fi
+# Different tmux versions print key tokens slightly differently (e.g.
+# `bind-key -T prefix C-o` vs `bind-key -T prefix ^O`), so accept either.
+if ! grep -qE 'C-o|\^O' <<< "$SECONDARY"; then
+    echo "FAIL [key-attached default] secondary binding not on C-o: $SECONDARY" >&2
+    exit 1
+fi
+echo "PASS [key-attached default] prefix + C-o bound to attached-only toggle"
+
+# 'none' sentinel suppresses the secondary binding.
+cleanup
+"${TMUX_CMD[@]}" new-session -d -s "$HOME_SESSION" -n base -x 120 -y 40
+"${TMUX_CMD[@]}" set-option -g @explode-key-attached none
+"${TMUX_CMD[@]}" run-shell "$REPO_ROOT/tmux_explode.tmux"
+
+SECONDARY=$("${TMUX_CMD[@]}" list-keys -T prefix \
+            | grep -F 'ONLY_ATTACHED_OVERRIDE=on' || true)
+if [[ -n "$SECONDARY" ]]; then
+    echo "FAIL [key-attached none] secondary binding installed despite 'none' sentinel" >&2
+    echo "$SECONDARY" >&2
+    exit 1
+fi
+echo "PASS [key-attached none] sentinel suppressed the secondary binding"
+
+"${TMUX_CMD[@]}" set-option -gu @explode-key-attached

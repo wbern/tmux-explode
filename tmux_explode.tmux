@@ -24,11 +24,12 @@ key=$(get_tmux_option "@explode-key" "$default_key")
 
 tmux bind-key "$key" run-shell "$CURRENT_DIR/scripts/overview_toggle.sh"
 
-# Optional secondary binding that flips the attached-only filter on for one
-# invocation via an env var, leaving @explode-only-attached untouched. Empty
-# default → no binding installed, so existing users see no surprise keys.
-attached_key=$(get_tmux_option "@explode-key-attached" "")
-if [ -n "$attached_key" ]; then
+# Secondary binding that flips the attached-only filter on for one
+# invocation via an env var, leaving @explode-only-attached untouched.
+# Set to "none" (or any empty-after-strip value) to skip the bind — useful
+# if `C-o` clashes with an existing prefix table key.
+attached_key=$(get_tmux_option "@explode-key-attached" "C-o")
+if [ -n "$attached_key" ] && [ "$attached_key" != "none" ]; then
     tmux bind-key "$attached_key" \
         run-shell "ONLY_ATTACHED_OVERRIDE=on $CURRENT_DIR/scripts/overview_toggle.sh"
 fi

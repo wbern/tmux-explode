@@ -92,7 +92,7 @@ re-sourcing `tmux.conf`.
 | Option                  | Default     | Description                                                          |
 | ----------------------- | ----------- | -------------------------------------------------------------------- |
 | `@explode-key`          | `O`         | Key bound under `prefix` to trigger the toggle.                      |
-| `@explode-key-attached` | *(unset)*   | Optional second key bound under `prefix` that triggers the toggle with the attached-only filter forced on for one invocation — without mutating `@explode-only-attached`. Empty by default so no extra binding is installed. `C-o` (Ctrl+O) is a safe pick on macOS where Meta/Alt usually needs terminal config to pass through. |
+| `@explode-key-attached` | `C-o`       | Second key bound under `prefix` that triggers the toggle with the attached-only filter forced on for that invocation — without mutating `@explode-only-attached`. Default `C-o` (Ctrl+O) works everywhere on macOS without terminal-emulator config. Set to `none` to skip the bind if it clashes with something else. |
 | `@explode-scope`        | `all`       | `all` = current session's other windows AND nested attaches to every other session, in the current window. `session` = only the current session's windows (uses an `overview` tab). `server` = only nested attaches to other sessions, in the current window. |
 | `@explode-mode`         | `active`    | `active` = gather only the active pane of each gathered window. `all` = sweep every pane. Applies to local-window gathering in `all` and `session` scopes; ignored when `@explode-scope = server`. |
 | `@explode-window-name`  | `overview`  | Name used for the overview window in **session scope** only. `all` and `server` scopes split the current window in place and ignore this option. |
@@ -116,9 +116,9 @@ set -g @explode-key 'E'
 set -g @explode-mode 'all'
 set -g @explode-window-name 'glance'
 
-# Optional: a second binding that filters the wall to attached siblings
-# without permanently changing @explode-only-attached.
-set -g @explode-key-attached 'C-o'
+# `prefix + C-o` is bound by default to a filtered wall (attached siblings
+# only). Override the key or set to 'none' to disable.
+set -g @explode-key-attached 'M-O'
 ```
 
 ## Behavior notes
