@@ -1,3 +1,9 @@
+## [2.4.0](https://github.com/wbern/tmux-explode/compare/v2.3.0...v2.4.0) (2026-05-24)
+
+### Features
+
+* [@explode-min-pane-height](https://github.com/explode-min-pane-height) drops overflow tiles on small clients ([9631ad3](https://github.com/wbern/tmux-explode/commit/9631ad368240527dfb442ac6d1608cddb785f904))
+
 ## [2.3.0](https://github.com/wbern/tmux-explode/compare/v2.2.0...v2.3.0) (2026-05-24)
 
 ### Features
