@@ -1,3 +1,9 @@
+## [2.1.0](https://github.com/wbern/tmux-explode/compare/v2.0.0...v2.1.0) (2026-05-24)
+
+### Features
+
+* **scope:** add [@explode-only-attached](https://github.com/explode-only-attached) filter for sibling sessions ([c30718e](https://github.com/wbern/tmux-explode/commit/c30718e216e8c5b2e89eb766cd21e10fa4a6be42))
+
 ## [2.0.0](https://github.com/wbern/tmux-explode/compare/v1.1.1...v2.0.0) (2026-05-13)
 
 ### ⚠ BREAKING CHANGES
