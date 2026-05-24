@@ -77,6 +77,13 @@ Two narrower scopes are available for users who want a tighter view — set
 - **`server`** — only nest-attach the *other* sessions, leaving your
   current session's other windows alone.
 
+On a busy server where most sibling sessions are idle, set
+`@explode-only-attached on` to restrict the wall to sessions that have at
+least one client attached. The filter composes with `all` and `server`
+scopes and is a no-op for `session` scope. The attached set is captured
+once when the wall is built — attaching or detaching clients afterward
+does not add or remove tiles. Toggle off and back on to refresh.
+
 ## Configuration
 
 All options are read fresh on each toggle, so changes take effect without
@@ -88,6 +95,7 @@ re-sourcing `tmux.conf`.
 | `@explode-scope`        | `all`       | `all` = current session's other windows AND nested attaches to every other session, in the current window. `session` = only the current session's windows (uses an `overview` tab). `server` = only nested attaches to other sessions, in the current window. |
 | `@explode-mode`         | `active`    | `active` = gather only the active pane of each gathered window. `all` = sweep every pane. Applies to local-window gathering in `all` and `session` scopes; ignored when `@explode-scope = server`. |
 | `@explode-window-name`  | `overview`  | Name used for the overview window in **session scope** only. `all` and `server` scopes split the current window in place and ignore this option. |
+| `@explode-only-attached` | `off`       | When `on`, restricts sibling-session tiles to sessions with at least one client attached. Composes with `@explode-scope = server` and `@explode-scope = all`; ignored for `session` scope. Useful on busy servers where most sessions are idle and only the attached ones matter. The attached set is snapshotted at build time — toggle off and on to refresh after attaching/detaching clients. |
 | `@explode-style-anchor` | `fg=yellow,bold` | Style applied to the anchor tile's border label (the pane the toggle fired from). Colors the label only — the border line itself is unchanged. In-place walls only. |
 | `@explode-style-local`  | `fg=cyan`   | Style applied to the labels of tiles gathered from other windows of the current session. In-place walls only. |
 | `@explode-style-remote` | `fg=magenta` | Style applied to the labels of nested-attach tiles pointing at sibling sessions. In-place walls only. |
