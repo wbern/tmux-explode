@@ -3,9 +3,10 @@
 # (panes restored to their origins).
 #
 # Runtime options (read fresh on each invocation):
-#   @explode-scope        'all' (default), 'session', or 'server'
-#   @explode-mode         'active' (default) or 'all'    [session/all scope only]
-#   @explode-window-name  default 'overview'             [session scope only]
+#   @explode-scope          'all' (default), 'session', or 'server'
+#   @explode-mode           'active' (default) or 'all'    [session/all scope only]
+#   @explode-window-name    default 'overview'             [session scope only]
+#   @explode-only-attached  'off' (default) or 'on'        [server/all scope only]
 
 set -euo pipefail
 
@@ -30,6 +31,7 @@ get_tmux_option() {
 OVERVIEW=$(get_tmux_option "@explode-window-name" "overview")
 MODE=$(get_tmux_option "@explode-mode" "active")
 SCOPE=$(get_tmux_option "@explode-scope" "all")
+ONLY_ATTACHED=$(get_tmux_option "@explode-only-attached" "off")
 
 # Column-bias knobs read by build_layout via the environment. The
 # validation lives in build_layout.sh so close_tile.sh can reuse it for
@@ -873,10 +875,20 @@ add_session_attach_pane() {
 
 other_session_names() {
     local s
-    while IFS= read -r s; do
-        [[ -z "$s" || "$s" == "$SESSION_NAME" ]] && continue
-        printf '%s\n' "$s"
-    done < <(tmux list-sessions -F '#{session_name}')
+    if [[ "$ONLY_ATTACHED" == "on" ]]; then
+        # Filter to sessions with at least one client attached. awk rather
+        # than tmux -f keeps us compatible with tmux 3.0.
+        while IFS= read -r s; do
+            [[ -z "$s" || "$s" == "$SESSION_NAME" ]] && continue
+            printf '%s\n' "$s"
+        done < <(tmux list-sessions -F '#{session_attached}'$'\t''#{session_name}' \
+                 | awk -F'\t' '$1 > 0 { print $2 }')
+    else
+        while IFS= read -r s; do
+            [[ -z "$s" || "$s" == "$SESSION_NAME" ]] && continue
+            printf '%s\n' "$s"
+        done < <(tmux list-sessions -F '#{session_name}')
+    fi
 }
 
 explode_server() {
