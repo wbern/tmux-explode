@@ -1,3 +1,9 @@
+## [2.3.0](https://github.com/wbern/tmux-explode/compare/v2.2.0...v2.3.0) (2026-05-24)
+
+### Features
+
+* default [@explode-key-attached](https://github.com/explode-key-attached) to C-o ([946081c](https://github.com/wbern/tmux-explode/commit/946081c7d58b710da986d4b8d2c5181aeb0f7e37))
+
 ## [2.2.0](https://github.com/wbern/tmux-explode/compare/v2.1.0...v2.2.0) (2026-05-24)
 
 ### Features
