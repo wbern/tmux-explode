@@ -9,7 +9,10 @@
 #
 # Tunables (env):
 #   EXPLODE_MIN_PANE_WIDTH   default 40   floor on per-column width in cells
-#   EXPLODE_MIN_PANE_HEIGHT  default 3    floor on per-tile height in cells
+#   EXPLODE_MIN_PANE_HEIGHT  default 12   floor on per-tile height in cells
+#                                         (~12 = 3 readable rows of a Claude
+#                                         Code TUI once its input box + status
+#                                         + footer chrome is subtracted)
 #                                         (compute_max_panes uses min_h + 1 to
 #                                         account for pane-border-status top
 #                                         eating one row per tile)
@@ -67,9 +70,9 @@ prepare_explode_layout_env() {
 compute_max_panes() {
     local sx=$1 sy=$2
     local min_w=${EXPLODE_MIN_PANE_WIDTH:-40}
-    local min_h=${EXPLODE_MIN_PANE_HEIGHT:-3}
+    local min_h=${EXPLODE_MIN_PANE_HEIGHT:-12}
     [[ "$min_w" =~ ^[0-9]+$ ]] || min_w=40
-    [[ "$min_h" =~ ^[0-9]+$ ]] || min_h=3
+    [[ "$min_h" =~ ^[0-9]+$ ]] || min_h=12
     (( min_w < 1 )) && min_w=1
     (( min_h < 1 )) && min_h=1
     local cols=$(( sx / min_w ))
@@ -308,7 +311,7 @@ self_test() {
     check_cap "desktop-wide"      280  60  40 10  35
     check_cap "tiny-floor"         10   5  40 10  1
     check_cap "min-h-larger-sy"    80  20  40 25  1
-    check_cap "validation-fallback" 200 50 "garbage" "junk" 60
+    check_cap "validation-fallback" 200 50 "garbage" "junk" 15
 
     if (( fail )); then
         echo "SELF-TEST FAILED"; return 1
