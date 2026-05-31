@@ -1,3 +1,9 @@
+## [2.5.0](https://github.com/wbern/tmux-explode/compare/v2.4.0...v2.5.0) (2026-05-31)
+
+### Features
+
+* lower [@explode-min-pane-height](https://github.com/explode-min-pane-height) default to 3 rows ([57ea155](https://github.com/wbern/tmux-explode/commit/57ea15575e0518bf260e4a88b1e1a0170ee91900))
+
 ## [2.4.0](https://github.com/wbern/tmux-explode/compare/v2.3.0...v2.4.0) (2026-05-24)
 
 ### Features
